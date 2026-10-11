@@ -1,6 +1,8 @@
 (() => {
   const tokenKey = 'taskearnApiToken';
   const localHosts = new Set(['localhost', '127.0.0.1']);
+  ['taskearnAccounts', 'taskearnTasks', 'taskearnLoginFailures', 'taskearnLoginClaims', 'taskearnAdminAccountRequest']
+    .forEach((key) => localStorage.removeItem(key));
   const apiBaseUrl = location.protocol === 'file:'
     || (localHosts.has(location.hostname) && location.port !== '5000')
     ? 'http://localhost:5000'
@@ -95,8 +97,8 @@
     if (bar) bar.className = `progress-${progress}`;
     if (copy) {
       copy.textContent = remaining
-        ? `Complete ${remaining} more task${remaining === 1 ? '' : 's'} this week to unlock Premium benefits.`
-        : 'Challenge complete. Premium benefits are ready to unlock.';
+        ? `Complete ${remaining} more task${remaining === 1 ? '' : 's'} to reach today's 5-task goal.`
+        : 'Daily task goal complete.';
     }
   };
 
@@ -123,14 +125,90 @@
     document.getElementById('app')?.classList.toggle('is-visible', isLoggedIn);
   }
 
+  window.showPage = function showPage(pageId, item) {
+    const page = document.getElementById(pageId);
+    if (!page || page.hidden) return;
+    document.querySelectorAll('#app .page').forEach((section) => {
+      section.classList.toggle('active', section === page);
+    });
+    document.querySelectorAll('#app .nav-item').forEach((navItem) => {
+      navItem.classList.toggle('active', navItem === item);
+    });
+    document.getElementById('sidebar')?.classList.remove('open');
+    window.scrollTo(0, 0);
+  };
+
+  window.toggleSidebar = function toggleSidebar() {
+    document.getElementById('sidebar')?.classList.toggle('open');
+  };
+
+  window.openModal = function openModal(modalId) {
+    document.getElementById(modalId)?.classList.add('is-open');
+  };
+
+  window.closeModal = function closeModal(modalId) {
+    document.getElementById(modalId)?.classList.remove('is-open');
+  };
+
+  window.openRegister = function openRegister() {
+    let modal = document.getElementById('registerModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.className = 'modal';
+      modal.id = 'registerModal';
+      modal.innerHTML = '<div class="modal-box"><div class="modal-header"><h2>Create your TaskEarn account</h2><button class="close" type="button" aria-label="Close">×</button></div><p class="u-color-64748b u-margin-bottom-20px">Create an account to access your member dashboard.</p><div id="registerMessage" aria-live="polite"></div><div class="form-group"><label for="registerName">Full Name</label><input id="registerName" autocomplete="name" placeholder="Your full name"></div><div class="form-group"><label for="registerEmail">Email Address</label><input type="email" id="registerEmail" autocomplete="email" placeholder="you@example.com"></div><div class="form-group"><label for="registerPassword">Password</label><input type="password" id="registerPassword" autocomplete="new-password" placeholder="Create a password"></div><div class="form-group"><label for="registerConfirm">Confirm Password</label><input type="password" id="registerConfirm" autocomplete="new-password" placeholder="Repeat your password"></div><button class="btn btn-primary full" type="button">Create Account</button></div>';
+      modal.querySelector('.close').addEventListener('click', () => window.closeModal('registerModal'));
+      modal.querySelector('.modal-box > .btn').addEventListener('click', () => window.createAccount());
+      modal.addEventListener('click', (event) => {
+        if (event.target === modal) window.closeModal('registerModal');
+      });
+      document.body.append(modal);
+    }
+    document.getElementById('registerMessage')?.replaceChildren();
+    window.openModal('registerModal');
+  };
+
+  function removeUnavailableDemoFeatures() {
+    ['referrals', 'subscription', 'support'].forEach((pageId) => {
+      document.getElementById(pageId)?.remove();
+      document.querySelectorAll('.sidebar .nav-item').forEach((item) => {
+        if (item.getAttribute('onclick')?.includes(`'${pageId}'`)) item.remove();
+      });
+    });
+    document.querySelector('.referral-box')?.remove();
+    document.querySelector('.notification')?.remove();
+    document.querySelector('.login-box button[onclick="signInWithGoogle()"]')?.remove();
+    document.getElementById('loginClaimModal')?.remove();
+    document.querySelector('#dashboard > .alert-success')?.remove();
+    document.querySelectorAll('.wallet-actions button').forEach((button) => {
+      if (button.textContent.includes('Add Funds')) button.remove();
+    });
+    document.getElementById('depositModal')?.remove();
+    document.querySelectorAll('#transactions select option').forEach((option) => {
+      if (['Referral Commission', 'Deposits'].includes(option.textContent)) option.remove();
+    });
+  }
+
+  const registerLink = document.createElement('button');
+  registerLink.type = 'button';
+  registerLink.className = 'btn btn-light full register-link';
+  registerLink.textContent = 'Create an account';
+  registerLink.addEventListener('click', () => window.openRegister());
+  document.querySelector('.login-box .btn-primary')?.after(registerLink);
+  removeUnavailableDemoFeatures();
+
   function updateAccountHeader(user) {
     const name = user.name || user.email;
     const firstName = name.split(/\s+/)[0];
     const userName = document.querySelector('.user-mini strong');
     const avatar = document.querySelector('.user-mini .avatar');
+    const roleName = document.querySelector('.user-mini small');
     const greeting = document.querySelector('#dashboard .page-title h1');
     if (userName) userName.textContent = firstName;
     if (avatar) avatar.textContent = name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
+    if (roleName) roleName.textContent = user.role === 'senior_admin'
+      ? 'Senior Admin'
+      : user.role === 'admin' ? 'Admin' : 'Member';
     if (greeting) greeting.textContent = `Good evening, ${firstName}`;
     document.querySelectorAll('#profile .profile-header p').forEach((item) => {
       item.textContent = user.email;
@@ -138,6 +216,28 @@
     document.querySelectorAll('#profile .profile-header h2').forEach((item) => {
       item.textContent = user.name;
     });
+  }
+
+  function updateDashboardLinks(role) {
+    const nav = document.querySelector('.sidebar .nav');
+    if (!nav) return;
+    nav.querySelectorAll('.role-nav-link').forEach((link) => link.remove());
+    if (role === 'admin' || role === 'senior_admin') {
+      const adminLink = document.createElement('a');
+      adminLink.className = 'nav-item role-nav-link';
+      adminLink.href = '/admin';
+      adminLink.style.textDecoration = 'none';
+      adminLink.textContent = 'Admin Console';
+      nav.append(adminLink);
+    }
+    if (role === 'senior_admin') {
+      const seniorLink = document.createElement('a');
+      seniorLink.className = 'nav-item role-nav-link';
+      seniorLink.href = '/senior';
+      seniorLink.style.textDecoration = 'none';
+      seniorLink.textContent = 'Senior Dashboard';
+      nav.append(seniorLink);
+    }
   }
 
   function renderTransactions(transactions = []) {
@@ -197,6 +297,8 @@
   function updateDashboard(data) {
     currentUser = data.user;
     apiTasks = data.tasks;
+    removeUnavailableDemoFeatures();
+    updateDashboardLinks(data.user.role);
     window.balance = data.stats.balance;
     window.updateBalance();
     window.updateLevelChallenge();
@@ -212,6 +314,13 @@
     if (walletStats[0]) walletStats[0].textContent = currency(data.user.wallet.totalDeposits);
     if (walletStats[1]) walletStats[1].textContent = currency(data.user.wallet.totalWithdrawals);
     if (walletStats[2]) walletStats[2].textContent = currency(data.user.wallet.pendingWithdrawals);
+
+    const completedTodayIds = data.user.completedToday?.taskIds || [];
+    const completedToday = data.tasks.filter((task) => completedTodayIds.includes(task.id));
+    const taskStats = document.querySelectorAll('#tasks .stats .amount');
+    if (taskStats[0]) taskStats[0].textContent = currency(completedToday.reduce((total, task) => total + task.reward, 0));
+    if (taskStats[1]) taskStats[1].textContent = `${completedToday.length} / ${data.tasks.length}`;
+    if (taskStats[2]) taskStats[2].textContent = String(data.tasks.length - completedToday.length);
 
     const builtInTitles = new Set([
       'Daily App Check',
@@ -296,12 +405,9 @@
         body: JSON.stringify({ email, password })
       });
       localStorage.setItem(tokenKey, result.token);
-      const failures = JSON.parse(localStorage.getItem('taskearnLoginFailures') || '{}');
-      delete failures[email];
-      localStorage.setItem('taskearnLoginFailures', JSON.stringify(failures));
       clearLoginMessage();
-      setVisibleState(true);
       await loadDashboard();
+      setVisibleState(true);
       showRenewalNotification();
     } catch (error) {
       showLoginMessage(error.message);
@@ -339,7 +445,7 @@
     }
 
     busy = true;
-    const button = document.querySelector('#registerModal button[onclick="createAccount()"]');
+    const button = document.querySelector('#registerModal .btn-primary');
     if (button) {
       button.disabled = true;
       button.textContent = 'Creating account...';
@@ -351,8 +457,8 @@
       });
       localStorage.setItem(tokenKey, result.token);
       closeModal('registerModal');
-      setVisibleState(true);
       await loadDashboard();
+      setVisibleState(true);
       showRenewalNotification();
     } catch (error) {
       showRegisterMessage(error.message);
@@ -448,6 +554,7 @@
       localStorage.removeItem(tokenKey);
       currentUser = null;
       apiTasks = [];
+      updateDashboardLinks('member');
       setVisibleState(false);
     }
   };
@@ -467,8 +574,8 @@
   async function restoreSession() {
     if (!localStorage.getItem(tokenKey)) return;
     try {
-      setVisibleState(true);
       await loadDashboard();
+      setVisibleState(true);
     } catch (error) {
       localStorage.removeItem(tokenKey);
       setVisibleState(false);

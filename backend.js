@@ -11,7 +11,6 @@ const MONGODB_URI = process.env.MONGODB_URI;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(__dirname));
 
 const tasks = [
   { id: 'daily-app-check', title: 'Daily App Check', category: 'app', reward: 50, description: 'Open and interact with the assigned application.' },
@@ -27,7 +26,7 @@ const userSchema = new mongoose.Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true, lowercase: true, trim: true },
   passwordHash: { type: String, required: true },
-  role: { type: String, enum: ['member', 'admin'], default: 'member' },
+  role: { type: String, enum: ['member', 'admin', 'senior_admin'], default: 'member' },
   plan: { type: String, default: 'Basic' },
   createdAt: { type: String, required: true },
   memberType: { type: String, required: true },
@@ -117,7 +116,7 @@ function createUser({
     role,
     plan,
     createdAt: new Date().toISOString(),
-    memberType: role === 'admin' ? 'Admin' : 'Member',
+    memberType: role === 'senior_admin' ? 'Senior Admin' : role === 'admin' ? 'Admin' : 'Member',
     availableBalance: startingBalance,
     totalEarnings,
     referralEarnings,
@@ -170,11 +169,11 @@ async function requireUser(req, res) {
   return user;
 }
 
-async function requireAdmin(req, res) {
+async function requireRole(req, res, allowedRoles) {
   const user = await requireUser(req, res);
   if (!user) return null;
-  if (user.role !== 'admin') {
-    res.status(403).json({ message: 'Admin access required.' });
+  if (!allowedRoles.includes(user.role)) {
+    res.status(403).json({ message: 'You do not have permission to access this resource.' });
     return null;
   }
   return user;
@@ -189,33 +188,32 @@ async function getAllTasks() {
   return [...tasks, ...publishedTasks.map((task) => task.toObject())];
 }
 
-async function ensureAdminAccount() {
-  const email = process.env.ADMIN_EMAIL?.trim().toLowerCase();
-  const password = process.env.ADMIN_PASSWORD;
+async function ensureRoleAccount({ email: configuredEmail, password, name, role, label }) {
+  const email = configuredEmail?.trim().toLowerCase();
   if (!email && !password) {
-    console.warn('ADMIN_EMAIL and ADMIN_PASSWORD are not set; no admin account was provisioned.');
+    console.warn(`${label} email and password are not set; no ${label.toLowerCase()} account was provisioned.`);
     return;
   }
   if (!email || !password) {
-    throw new Error('Set both ADMIN_EMAIL and ADMIN_PASSWORD to provision the admin account.');
+    throw new Error(`Set both ${label.toUpperCase().replaceAll(' ', '_')}_EMAIL and ${label.toUpperCase().replaceAll(' ', '_')}_PASSWORD to provision the ${label.toLowerCase()} account.`);
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 12) {
-    throw new Error('ADMIN_EMAIL must be valid and ADMIN_PASSWORD must be at least 12 characters.');
+    throw new Error(`${label.toUpperCase().replaceAll(' ', '_')}_EMAIL must be valid and its password must be at least 12 characters.`);
   }
 
   const existingUser = await User.findOne({ email });
   if (existingUser) {
-    if (existingUser.role !== 'admin') {
-      throw new Error('ADMIN_EMAIL is already registered as a member; choose another admin email.');
+    if (existingUser.role !== role) {
+      throw new Error(`${label.toUpperCase().replaceAll(' ', '_')}_EMAIL is already registered with another role; choose another email.`);
     }
     return;
   }
 
   await User.create(createUser({
-    name: process.env.ADMIN_NAME?.trim() || 'Administrator',
+    name: name?.trim() || label,
     email,
     password,
-    role: 'admin'
+    role
   }));
 }
 
@@ -277,6 +275,12 @@ app.post('/api/login', async (req, res) => {
     token: await issueSession(user),
     user: sanitizeUser(user)
   });
+});
+
+app.get('/api/me', async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  res.json({ user: sanitizeUser(user) });
 });
 
 app.post('/api/logout', async (req, res) => {
@@ -440,7 +444,7 @@ app.post('/api/withdraw', async (req, res) => {
 });
 
 app.get('/api/admin/summary', async (req, res) => {
-  if (!await requireAdmin(req, res)) return;
+  if (!await requireRole(req, res, ['senior_admin'])) return;
   const [users, pendingWithdrawalRequests, publishedTasks] = await Promise.all([
     User.find(),
     WithdrawalRequest.countDocuments({ status: 'pending' }),
@@ -448,6 +452,7 @@ app.get('/api/admin/summary', async (req, res) => {
   ]);
   res.json({
     totalUsers: users.length,
+    totalMembers: users.filter((user) => user.role === 'member').length,
     totalBalance: users.reduce((sum, user) => sum + user.availableBalance, 0),
     totalEarnings: users.reduce((sum, user) => sum + user.totalEarnings, 0),
     pendingWithdrawals: users.reduce((sum, user) => sum + user.wallet.pendingWithdrawals, 0),
@@ -459,19 +464,20 @@ app.get('/api/admin/summary', async (req, res) => {
 });
 
 app.get('/api/admin/tasks', async (req, res) => {
-  if (!await requireAdmin(req, res)) return;
+  if (!await requireRole(req, res, ['senior_admin'])) return;
   const publishedTasks = await PublishedTask.find().sort({ createdAt: -1 }).lean();
   res.json({ tasks: publishedTasks });
 });
 
 app.get('/api/admin/users', async (req, res) => {
-  if (!await requireAdmin(req, res)) return;
-  const users = await User.find();
+  const admin = await requireRole(req, res, ['admin', 'senior_admin']);
+  if (!admin) return;
+  const users = await User.find(admin.role === 'admin' ? { role: 'member' } : {});
   res.json({ users: users.map(sanitizeUser) });
 });
 
 app.get('/api/admin/withdrawals', async (req, res) => {
-  if (!await requireAdmin(req, res)) return;
+  if (!await requireRole(req, res, ['senior_admin'])) return;
   const withdrawals = await WithdrawalRequest.find().sort({ createdAt: -1 }).lean();
   const users = await User.find({ id: { $in: withdrawals.map((request) => request.userId) } });
   const usersById = new Map(users.map((user) => [user.id, user]));
@@ -489,7 +495,7 @@ app.get('/api/admin/withdrawals', async (req, res) => {
 });
 
 app.post('/api/admin/withdrawals/:id/review', async (req, res) => {
-  if (!await requireAdmin(req, res)) return;
+  if (!await requireRole(req, res, ['senior_admin'])) return;
   const status = req.body?.status;
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(400).json({ message: 'Choose approve or reject for this withdrawal.' });
@@ -525,7 +531,7 @@ app.post('/api/admin/withdrawals/:id/review', async (req, res) => {
 });
 
 app.post('/api/admin/users', async (req, res) => {
-  if (!await requireAdmin(req, res)) return;
+  if (!await requireRole(req, res, ['admin', 'senior_admin'])) return;
 
   const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
@@ -556,7 +562,7 @@ app.post('/api/admin/users', async (req, res) => {
 });
 
 app.post('/api/admin/tasks', async (req, res) => {
-  if (!await requireAdmin(req, res)) return;
+  if (!await requireRole(req, res, ['senior_admin'])) return;
 
   const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
   const type = typeof req.body?.type === 'string' ? req.body.type : 'standard';
@@ -593,13 +599,19 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-app.get('/admin', (req, res) => {
+app.get(['/admin', '/admin.html'], async (req, res) => {
+  res.set('Cache-Control', 'private, no-store');
+  if (!await requireRole(req, res, ['admin', 'senior_admin'])) return;
   res.sendFile(path.join(__dirname, 'admin.html'));
 });
 
-app.get('/senior', (req, res) => {
+app.get(['/senior', '/senior.html'], async (req, res) => {
+  res.set('Cache-Control', 'private, no-store');
+  if (!await requireRole(req, res, ['senior_admin'])) return;
   res.sendFile(path.join(__dirname, 'senior.html'));
 });
+
+app.use(express.static(__dirname));
 
 app.use((req, res) => {
   res.status(404).json({ message: 'Route not found.' });
@@ -620,7 +632,20 @@ async function startServer() {
   }
 
   await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
-  await ensureAdminAccount();
+  await ensureRoleAccount({
+    email: process.env.ADMIN_EMAIL,
+    password: process.env.ADMIN_PASSWORD,
+    name: process.env.ADMIN_NAME || 'Administrator',
+    role: 'admin',
+    label: 'Admin'
+  });
+  await ensureRoleAccount({
+    email: process.env.SENIOR_ADMIN_EMAIL,
+    password: process.env.SENIOR_ADMIN_PASSWORD,
+    name: process.env.SENIOR_ADMIN_NAME || 'Senior Administrator',
+    role: 'senior_admin',
+    label: 'Senior Admin'
+  });
   return app.listen(PORT, () => {
     console.log(`TaskEarn backend is running on port ${PORT}`);
   });
