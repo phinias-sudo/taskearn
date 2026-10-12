@@ -10,16 +10,7 @@ const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI;
 
 app.use(cors());
-app.use(express.json());
-
-const tasks = [
-  { id: 'daily-app-check', title: 'Daily App Check', category: 'app', reward: 50, description: 'Open and interact with the assigned application.' },
-  { id: 'quick-survey', title: 'Quick Survey', category: 'survey', reward: 75, description: 'Answer a short customer survey.' },
-  { id: 'product-research', title: 'Product Research', category: 'research', reward: 100, description: 'Complete a short product research activity.' },
-  { id: 'app-engagement', title: 'App Engagement', category: 'app', reward: 50, description: 'Complete an assigned app activity.' },
-  { id: 'survey', title: 'Survey', category: 'survey', reward: 75, description: 'Answer questions about a product or service.' },
-  { id: 'review-task', title: 'Review Task', category: 'review', reward: 100, description: 'Provide feedback about an assigned service.' }
-];
+app.use(express.json({ limit: '2mb' }));
 
 const userSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
@@ -27,6 +18,7 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true, lowercase: true, trim: true },
   passwordHash: { type: String, required: true },
   role: { type: String, enum: ['member', 'admin', 'senior_admin'], default: 'member' },
+  status: { type: String, enum: ['active', 'suspended'], default: 'active' },
   plan: { type: String, default: 'Basic' },
   createdAt: { type: String, required: true },
   memberType: { type: String, required: true },
@@ -70,6 +62,19 @@ const withdrawalSchema = new mongoose.Schema({
   reviewedAt: { type: String }
 }, { versionKey: false });
 
+const subscriptionPaymentSchema = new mongoose.Schema({
+  id: { type: String, required: true, unique: true },
+  userId: { type: String, required: true, index: true },
+  requestedPlan: { type: String, enum: ['Basic', 'Premium', 'VIP'], required: true },
+  paymentReference: { type: String, required: true },
+  proofData: { type: String, required: true },
+  proofMimeType: { type: String, enum: ['image/jpeg', 'image/png', 'image/webp'], required: true },
+  status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+  createdAt: { type: String, required: true },
+  reviewedAt: { type: String },
+  reviewedBy: { type: String }
+}, { versionKey: false });
+
 const sessionSchema = new mongoose.Schema({
   tokenHash: { type: String, required: true, unique: true },
   userId: { type: String, required: true, index: true },
@@ -79,6 +84,7 @@ const sessionSchema = new mongoose.Schema({
 const User = mongoose.model('User', userSchema);
 const PublishedTask = mongoose.model('PublishedTask', taskSchema);
 const WithdrawalRequest = mongoose.model('WithdrawalRequest', withdrawalSchema);
+const SubscriptionPayment = mongoose.model('SubscriptionPayment', subscriptionPaymentSchema);
 const LoginSession = mongoose.model('LoginSession', sessionSchema);
 
 function hashPassword(password) {
@@ -139,6 +145,15 @@ function hashSessionToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+function isValidPaymentImage(mimeType, data) {
+  if (mimeType === 'image/jpeg') return data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
+  if (mimeType === 'image/png') return data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  return mimeType === 'image/webp'
+    && data.length >= 12
+    && data.toString('ascii', 0, 4) === 'RIFF'
+    && data.toString('ascii', 8, 12) === 'WEBP';
+}
+
 async function issueSession(user) {
   const token = crypto.randomUUID();
   await LoginSession.create({
@@ -166,6 +181,10 @@ async function requireUser(req, res) {
     res.status(401).json({ message: 'Unauthorized. Please log in again.' });
     return null;
   }
+  if (user.status === 'suspended') {
+    res.status(403).json({ message: 'This account is suspended. Contact a senior administrator for assistance.' });
+    return null;
+  }
   return user;
 }
 
@@ -185,7 +204,7 @@ function getToday() {
 
 async function getAllTasks() {
   const publishedTasks = await PublishedTask.find().sort({ createdAt: -1 });
-  return [...tasks, ...publishedTasks.map((task) => task.toObject())];
+  return publishedTasks.map((task) => task.toObject());
 }
 
 async function ensureRoleAccount({ email: configuredEmail, password, name, role, label }) {
@@ -269,6 +288,9 @@ app.post('/api/login', async (req, res) => {
   if (!user || !passwordMatches(password, user.passwordHash)) {
     return res.status(401).json({ message: 'Invalid email or password.' });
   }
+  if (user.status === 'suspended') {
+    return res.status(403).json({ message: 'This account is suspended. Contact a senior administrator for assistance.' });
+  }
 
   return res.json({
     message: 'Login successful.',
@@ -292,7 +314,7 @@ app.post('/api/logout', async (req, res) => {
 });
 
 app.get('/api/dashboard', async (req, res) => {
-  const user = await requireUser(req, res);
+  const user = await requireRole(req, res, ['member', 'senior_admin']);
   if (!user) return;
 
   const today = getToday();
@@ -316,7 +338,7 @@ app.get('/api/dashboard', async (req, res) => {
 });
 
 app.get('/api/tasks', async (req, res) => {
-  const user = await requireUser(req, res);
+  const user = await requireRole(req, res, ['member', 'senior_admin']);
   if (!user) return;
 
   const today = getToday();
@@ -333,7 +355,7 @@ app.get('/api/tasks', async (req, res) => {
 });
 
 app.post('/api/tasks/:taskId/complete', async (req, res) => {
-  const user = await requireUser(req, res);
+  const user = await requireRole(req, res, ['member', 'senior_admin']);
   if (!user) return;
 
   const task = (await getAllTasks()).find((item) => item.id === req.params.taskId);
@@ -380,8 +402,64 @@ app.get('/api/wallet', async (req, res) => {
   });
 });
 
+app.post('/api/subscription/payments', async (req, res) => {
+  const user = await requireRole(req, res, ['member']);
+  if (!user) return;
+
+  const requestedPlan = req.body?.requestedPlan;
+  const paymentReference = typeof req.body?.paymentReference === 'string'
+    ? req.body.paymentReference.trim()
+    : '';
+  const proof = typeof req.body?.proof === 'string' ? req.body.proof : '';
+  const proofMatch = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/.exec(proof);
+
+  if (!['Basic', 'Premium', 'VIP'].includes(requestedPlan)) {
+    return res.status(400).json({ message: 'Choose a valid subscription plan.' });
+  }
+  if (!paymentReference || paymentReference.length > 100) {
+    return res.status(400).json({ message: 'Enter a valid payment reference.' });
+  }
+  const proofBuffer = proofMatch ? Buffer.from(proofMatch[2], 'base64') : null;
+  if (!proofMatch || proofBuffer.length > 1024 * 1024 || !isValidPaymentImage(proofMatch[1], proofBuffer)) {
+    return res.status(400).json({ message: 'Upload a JPEG, PNG, or WebP payment image no larger than 1 MB.' });
+  }
+  if (await SubscriptionPayment.exists({ userId: user.id, status: 'pending' })) {
+    return res.status(409).json({ message: 'You already have a subscription payment awaiting review.' });
+  }
+
+  const payment = await SubscriptionPayment.create({
+    id: crypto.randomUUID(),
+    userId: user.id,
+    requestedPlan,
+    paymentReference,
+    proofData: proofMatch[2],
+    proofMimeType: proofMatch[1],
+    status: 'pending',
+    createdAt: new Date().toISOString()
+  });
+  res.status(201).json({
+    message: 'Subscription payment submitted for admin review.',
+    payment: {
+      id: payment.id,
+      requestedPlan: payment.requestedPlan,
+      status: payment.status,
+      createdAt: payment.createdAt
+    }
+  });
+});
+
+app.get('/api/subscription/payments', async (req, res) => {
+  const user = await requireRole(req, res, ['member', 'senior_admin']);
+  if (!user) return;
+  const payments = await SubscriptionPayment.find({ userId: user.id })
+    .select('-proofData')
+    .sort({ createdAt: -1 })
+    .lean();
+  res.json({ payments });
+});
+
 app.post('/api/withdraw', async (req, res) => {
-  const user = await requireUser(req, res);
+  const user = await requireRole(req, res, ['member', 'senior_admin']);
   if (!user) return;
 
   const amount = Number(req.body?.amount);
@@ -459,12 +537,12 @@ app.get('/api/admin/summary', async (req, res) => {
     pendingWithdrawalRequests,
     tasksCompleted: users.reduce((sum, user) => sum + user.tasksCompleted, 0),
     publishedTasks,
-    activeTasks: tasks.length + publishedTasks
+    activeTasks: publishedTasks
   });
 });
 
 app.get('/api/admin/tasks', async (req, res) => {
-  if (!await requireRole(req, res, ['senior_admin'])) return;
+  if (!await requireRole(req, res, ['admin', 'senior_admin'])) return;
   const publishedTasks = await PublishedTask.find().sort({ createdAt: -1 }).lean();
   res.json({ tasks: publishedTasks });
 });
@@ -474,6 +552,113 @@ app.get('/api/admin/users', async (req, res) => {
   if (!admin) return;
   const users = await User.find(admin.role === 'admin' ? { role: 'member' } : {});
   res.json({ users: users.map(sanitizeUser) });
+});
+
+app.post('/api/admin/users/:id/status', async (req, res) => {
+  const admin = await requireRole(req, res, ['admin', 'senior_admin']);
+  if (!admin) return;
+  const status = req.body?.status;
+  if (!['active', 'suspended'].includes(status)) {
+    return res.status(400).json({ message: 'Choose active or suspended for this account.' });
+  }
+  const user = await User.findOne({ id: req.params.id });
+  if (!user) return res.status(404).json({ message: 'User account not found.' });
+  if (admin.role === 'admin' && user.role !== 'member') {
+    return res.status(403).json({ message: 'Regular admins can only manage member accounts.' });
+  }
+  user.status = status;
+  await user.save();
+  res.json({ message: status === 'active' ? 'Member account approved.' : 'Member account suspended.', user: sanitizeUser(user) });
+});
+
+app.get('/api/admin/subscription-payments', async (req, res) => {
+  const admin = await requireRole(req, res, ['admin', 'senior_admin']);
+  if (!admin) return;
+  const users = await User.find(admin.role === 'admin' ? { role: 'member' } : {}).select('id name email');
+  const userIds = users.map((user) => user.id);
+  const payments = await SubscriptionPayment.find(
+    admin.role === 'admin' ? { userId: { $in: userIds } } : {}
+  ).sort({ createdAt: -1 }).lean();
+  const usersById = new Map(users.map((user) => [user.id, user]));
+  res.json({
+    payments: payments.map((payment) => {
+      const user = usersById.get(payment.userId);
+      return {
+        ...payment,
+        memberName: user?.name || 'Unknown member',
+        memberEmail: user?.email || ''
+      };
+    })
+  });
+});
+
+app.post('/api/admin/subscription-payments/:id/review', async (req, res) => {
+  const admin = await requireRole(req, res, ['admin', 'senior_admin']);
+  if (!admin) return;
+  const status = req.body?.status;
+  if (!['approved', 'rejected'].includes(status)) {
+    return res.status(400).json({ message: 'Choose approve or reject for this payment.' });
+  }
+
+  const payment = await SubscriptionPayment.findOne({ id: req.params.id });
+  if (!payment) return res.status(404).json({ message: 'Subscription payment not found.' });
+  if (payment.status !== 'pending') {
+    return res.status(409).json({ message: 'This subscription payment has already been reviewed.' });
+  }
+  const user = await User.findOne({ id: payment.userId });
+  if (!user) return res.status(404).json({ message: 'The member account for this payment no longer exists.' });
+  if (admin.role === 'admin' && user.role !== 'member') {
+    return res.status(403).json({ message: 'Regular admins can only review member payments.' });
+  }
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      payment.status = status;
+      payment.reviewedAt = new Date().toISOString();
+      payment.reviewedBy = admin.id;
+      if (status === 'approved') user.plan = payment.requestedPlan;
+      await payment.save({ session });
+      await user.save({ session });
+    });
+  } finally {
+    await session.endSession();
+  }
+
+  res.json({
+    message: status === 'approved'
+      ? `Payment verified. The member's plan is now ${payment.requestedPlan}; no wallet funds were added.`
+      : 'Payment rejected. No wallet funds were added.',
+    payment: { id: payment.id, status: payment.status, requestedPlan: payment.requestedPlan }
+  });
+});
+
+app.post('/api/admin/users/:id/balance-adjustments', async (req, res) => {
+  const seniorAdmin = await requireRole(req, res, ['senior_admin']);
+  if (!seniorAdmin) return;
+  const amount = Number(req.body?.amount);
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  if (!Number.isInteger(amount) || amount === 0 || Math.abs(amount) > 1000000) {
+    return res.status(400).json({ message: 'Enter a whole-number adjustment from -1,000,000 to 1,000,000, excluding zero.' });
+  }
+  if (!reason || reason.length > 500) {
+    return res.status(400).json({ message: 'A reason of up to 500 characters is required.' });
+  }
+  const user = await User.findOne({ id: req.params.id });
+  if (!user) return res.status(404).json({ message: 'User account not found.' });
+  if (user.availableBalance + amount < 0) {
+    return res.status(400).json({ message: 'This adjustment cannot make the wallet balance negative.' });
+  }
+  user.availableBalance += amount;
+  user.transactions.unshift({
+    id: crypto.randomUUID(),
+    date: getToday(),
+    description: `Senior Admin balance adjustment by ${seniorAdmin.id}: ${reason}`,
+    amount,
+    status: 'completed'
+  });
+  await user.save();
+  res.json({ message: 'Balance adjustment recorded.', user: sanitizeUser(user) });
 });
 
 app.get('/api/admin/withdrawals', async (req, res) => {
@@ -562,7 +747,7 @@ app.post('/api/admin/users', async (req, res) => {
 });
 
 app.post('/api/admin/tasks', async (req, res) => {
-  if (!await requireRole(req, res, ['senior_admin'])) return;
+  if (!await requireRole(req, res, ['admin', 'senior_admin'])) return;
 
   const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
   const type = typeof req.body?.type === 'string' ? req.body.type : 'standard';
@@ -599,16 +784,16 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-app.get(['/admin', '/admin.html'], async (req, res) => {
+app.get(['/admin', '/admin.html', '/dashboards/admin', '/dashboards/admin/index.html'], async (req, res) => {
   res.set('Cache-Control', 'private, no-store');
   if (!await requireRole(req, res, ['admin', 'senior_admin'])) return;
-  res.sendFile(path.join(__dirname, 'admin.html'));
+  res.sendFile(path.join(__dirname, 'dashboards', 'admin', 'index.html'));
 });
 
-app.get(['/senior', '/senior.html'], async (req, res) => {
+app.get(['/senior', '/senior.html', '/dashboards/senior', '/dashboards/senior/index.html'], async (req, res) => {
   res.set('Cache-Control', 'private, no-store');
   if (!await requireRole(req, res, ['senior_admin'])) return;
-  res.sendFile(path.join(__dirname, 'senior.html'));
+  res.sendFile(path.join(__dirname, 'dashboards', 'senior', 'index.html'));
 });
 
 app.use(express.static(__dirname));

@@ -1,13 +1,16 @@
 (() => {
   const tokenKey = 'taskearnApiToken';
+  let currentRole = 'admin';
   const notice = document.getElementById('adminNotice');
   const userRows = document.getElementById('userRows');
   const taskRows = document.getElementById('taskRows');
   const withdrawalRows = document.getElementById('withdrawalRows');
+  const paymentRows = document.getElementById('paymentRows');
   const headings = {
     overview: 'Platform Overview',
     users: 'Member Accounts',
     tasks: 'Published Tasks',
+    payments: 'Subscription Payments',
     withdrawals: 'Withdrawal Requests'
   };
 
@@ -64,10 +67,57 @@
     member.append(name, email);
     row.append(member);
     cell(row, user.plan || 'Basic');
+    cell(row, user.status === 'suspended' ? 'Suspended' : 'Active');
     cell(row, `KES ${Number(user.availableBalance).toLocaleString()}`);
     cell(row, Number(user.tasksCompleted).toLocaleString());
     cell(row, new Date(user.createdAt).toLocaleDateString());
+    const actions = cell(row, '');
+    const statusButton = document.createElement('button');
+    statusButton.type = 'button';
+    statusButton.className = `btn ${user.status === 'suspended' ? 'success' : 'danger'}`;
+    statusButton.textContent = user.status === 'suspended' ? 'Approve' : 'Suspend';
+    statusButton.addEventListener('click', () => updateUserStatus(user, statusButton));
+    actions.append(statusButton);
+    if (currentRole === 'senior_admin') {
+      const adjustButton = document.createElement('button');
+      adjustButton.type = 'button';
+      adjustButton.className = 'btn secondary';
+      adjustButton.textContent = 'Adjust balance';
+      adjustButton.addEventListener('click', () => adjustBalance(user, adjustButton));
+      actions.append(document.createTextNode(' '), adjustButton);
+    }
     userRows.append(row);
+  }
+
+  function renderPayment(payment) {
+    const row = document.createElement('tr');
+    cell(row, `${payment.memberName} (${payment.memberEmail})`);
+    cell(row, payment.requestedPlan);
+    cell(row, payment.paymentReference);
+    const proofCell = cell(row, '');
+    const proofLink = document.createElement('a');
+    proofLink.href = `data:${payment.proofMimeType};base64,${payment.proofData}`;
+    proofLink.target = '_blank';
+    proofLink.rel = 'noopener noreferrer';
+    proofLink.textContent = 'View proof';
+    proofCell.append(proofLink);
+    const statusCell = cell(row, '');
+    const badge = document.createElement('span');
+    badge.className = `badge ${payment.status}`;
+    badge.textContent = payment.status[0].toUpperCase() + payment.status.slice(1);
+    statusCell.append(badge);
+    const decisionCell = cell(row, '');
+    if (payment.status === 'pending') {
+      ['approved', 'rejected'].forEach((status) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `btn ${status === 'approved' ? 'success' : 'danger'}`;
+        button.textContent = status === 'approved' ? 'Approve' : 'Reject';
+        button.addEventListener('click', () => reviewPayment(payment.id, status, button));
+        decisionCell.append(button, document.createTextNode(' '));
+      });
+    }
+    paymentRows.append(row);
   }
 
   function renderTask(task) {
@@ -120,7 +170,7 @@
   async function loadUsers() {
     const { users } = await request('/api/admin/users');
     if (!users.length) {
-      emptyRow(userRows, 5, 'No member accounts have been created.');
+      emptyRow(userRows, 7, 'No member accounts have been created.');
       return;
     }
     userRows.replaceChildren();
@@ -135,6 +185,16 @@
     }
     taskRows.replaceChildren();
     tasks.forEach(renderTask);
+  }
+
+  async function loadPayments() {
+    const { payments } = await request('/api/admin/subscription-payments');
+    if (!payments.length) {
+      emptyRow(paymentRows, 6, 'No subscription payment uploads have been submitted.');
+      return;
+    }
+    paymentRows.replaceChildren();
+    payments.forEach(renderPayment);
   }
 
   async function loadWithdrawals() {
@@ -166,6 +226,66 @@
       });
       showNotice(result.message);
       await Promise.all([loadWithdrawals(), loadSummary()]);
+    } catch (error) {
+      button.disabled = false;
+      showNotice(error.message);
+    }
+  }
+
+  async function updateUserStatus(user, button) {
+    const status = user.status === 'suspended' ? 'active' : 'suspended';
+    button.disabled = true;
+    try {
+      await request(`/api/admin/users/${encodeURIComponent(user.id)}/status`, {
+        method: 'POST',
+        body: JSON.stringify({ status })
+      });
+      await loadUsers();
+      showNotice(status === 'active' ? 'Member account approved.' : 'Member account suspended.');
+    } catch (error) {
+      button.disabled = false;
+      showNotice(error.message);
+    }
+  }
+
+  async function reviewPayment(paymentId, status, button) {
+    button.disabled = true;
+    try {
+      const result = await request(`/api/admin/subscription-payments/${encodeURIComponent(paymentId)}/review`, {
+        method: 'POST',
+        body: JSON.stringify({ status })
+      });
+      const refresh = [loadPayments(), loadUsers()];
+      if (currentRole === 'senior_admin') refresh.push(loadSummary());
+      await Promise.all(refresh);
+      showNotice(result.message);
+    } catch (error) {
+      button.disabled = false;
+      showNotice(error.message);
+    }
+  }
+
+  async function adjustBalance(user, button) {
+    const amountText = window.prompt(`Balance adjustment for ${user.name}. Use a negative number to subtract:`);
+    if (amountText === null) return;
+    const amount = Number(amountText);
+    if (!Number.isInteger(amount) || amount === 0) {
+      showNotice('Enter a non-zero whole-number balance adjustment.');
+      return;
+    }
+    const reason = window.prompt('Reason for this balance adjustment:');
+    if (reason === null || !reason.trim()) {
+      showNotice('A reason is required for each balance adjustment.');
+      return;
+    }
+    button.disabled = true;
+    try {
+      await request(`/api/admin/users/${encodeURIComponent(user.id)}/balance-adjustments`, {
+        method: 'POST',
+        body: JSON.stringify({ amount, reason: reason.trim() })
+      });
+      await Promise.all([loadUsers(), loadSummary()]);
+      showNotice('Balance adjustment recorded with its reason.');
     } catch (error) {
       button.disabled = false;
       showNotice(error.message);
@@ -228,20 +348,21 @@
   }
 
   function configureRole(role) {
+    currentRole = role;
     const isSeniorAdmin = role === 'senior_admin';
     document.querySelectorAll('.nav button').forEach((button) => {
-      button.hidden = !isSeniorAdmin && button.dataset.page !== 'users';
+      button.hidden = !isSeniorAdmin && !['users', 'tasks', 'payments'].includes(button.dataset.page);
     });
     document.querySelectorAll('.page').forEach((page) => {
-      page.hidden = !isSeniorAdmin && page.id !== 'users';
+      page.hidden = !isSeniorAdmin && !['users', 'tasks', 'payments'].includes(page.id);
     });
 
     const links = document.querySelector('.links');
-    const userLink = document.createElement('a');
-    userLink.href = '/';
-    userLink.textContent = 'User Dashboard';
-    links.append(userLink);
     if (isSeniorAdmin) {
+      const userLink = document.createElement('a');
+      userLink.href = '/';
+      userLink.textContent = 'User Dashboard';
+      links.append(userLink);
       const seniorLink = document.createElement('a');
       seniorLink.href = '/senior';
       seniorLink.textContent = 'Senior Dashboard';
@@ -264,7 +385,10 @@
       await loadUsers();
       if (user.role === 'senior_admin') {
         await Promise.all([loadSummary(), loadTasks(), loadWithdrawals()]);
+      } else {
+        await loadTasks();
       }
+      await loadPayments();
     } catch (error) {
       if (error.status === 401) localStorage.removeItem(tokenKey);
       window.location.replace('/');

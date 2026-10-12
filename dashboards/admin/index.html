@@ -17,6 +17,7 @@
       <button type="button" data-page="overview">Overview</button>
       <button type="button" data-page="users">Users</button>
       <button type="button" data-page="tasks">Tasks</button>
+      <button type="button" data-page="payments">Subscription payments</button>
       <button type="button" data-page="withdrawals">Withdrawals</button>
     </nav>
     <button type="button" class="logout">Log out</button>
@@ -44,7 +45,12 @@
           <label>Plan<select name="plan"><option>Basic</option><option>Premium</option><option>VIP</option></select></label>
           <div class="full"><button class="btn" type="submit">Create member</button> <button class="btn secondary" type="button" id="cancelAddUser">Cancel</button></div>
         </form>
-        <div class="table-wrap"><table><thead><tr><th>Member</th><th>Plan</th><th>Balance</th><th>Tasks</th><th>Joined</th></tr></thead><tbody id="userRows"><tr><td colspan="5">Loading members…</td></tr></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>Member</th><th>Plan</th><th>Status</th><th>Balance</th><th>Tasks</th><th>Joined</th><th>Actions</th></tr></thead><tbody id="userRows"><tr><td colspan="7">Loading members…</td></tr></tbody></table></div>
+      </section>
+      <section class="page" id="payments">
+        <h2>Subscription payment uploads</h2>
+        <p class="muted">Verify the member’s payment externally before approving. Approval updates the selected plan only and never adds money to a wallet.</p>
+        <div class="table-wrap"><table><thead><tr><th>Member</th><th>Requested plan</th><th>Payment reference</th><th>Proof</th><th>Status</th><th>Decision</th></tr></thead><tbody id="paymentRows"><tr><td colspan="6">Loading payment uploads…</td></tr></tbody></table></div>
       </section>
       <section class="page" id="tasks">
         <div class="toolbar"><div><h2>Published tasks</h2><p class="muted">Create tasks available to members.</p></div><button class="btn" type="button" id="showAddTask">Create task</button></div>
@@ -66,6 +72,6 @@
     </div>
   </main>
 </div>
-<script src="admin-client.js"></script>
+<script src="/dashboards/admin/dashboard.js"></script>
 </body>
 </html>

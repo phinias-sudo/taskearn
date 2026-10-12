@@ -10,6 +10,7 @@
   let apiTasks = [];
   let currentUser = null;
   let busy = false;
+  let selectedPaymentProof = '';
 
   async function apiRequest(url, options = {}) {
     const headers = new Headers(options.headers || {});
@@ -168,7 +169,7 @@
     window.openModal('registerModal');
   };
 
-  function removeUnavailableDemoFeatures() {
+  function removeUnavailableFeatures() {
     ['referrals', 'subscription', 'support'].forEach((pageId) => {
       document.getElementById(pageId)?.remove();
       document.querySelectorAll('.sidebar .nav-item').forEach((item) => {
@@ -189,13 +190,112 @@
     });
   }
 
+  function setupSubscriptionPayments() {
+    const nav = document.querySelector('.sidebar .nav');
+    const content = document.querySelector('#app .content');
+    if (!nav || !content || document.getElementById('subscription-payments')) return;
+
+    const navItem = document.createElement('div');
+    navItem.className = 'nav-item';
+    navItem.textContent = 'Subscription Payments';
+    navItem.addEventListener('click', () => window.showPage('subscription-payments', navItem));
+    nav.append(navItem);
+
+    const page = document.createElement('section');
+    page.className = 'page';
+    page.id = 'subscription-payments';
+    page.innerHTML = '<div class="page-title"><h1>Subscription payments</h1><p>Upload proof after paying. An admin will verify the payment before your selected plan is activated. Approving a subscription never adds funds to your wallet.</p></div><div id="subscriptionPaymentMessage" aria-live="polite"></div><div class="card"><div class="form-group"><label for="subscriptionPlan">Requested plan</label><select id="subscriptionPlan"><option value="Basic">Basic</option><option value="Premium">Premium</option><option value="VIP">VIP</option></select></div><div class="form-group"><label for="paymentReference">Payment reference</label><input id="paymentReference" maxlength="100" placeholder="Enter the transaction reference"></div><div class="form-group"><label for="paymentProof">Payment receipt image (JPEG, PNG, or WebP; max 1 MB)</label><input id="paymentProof" type="file" accept="image/jpeg,image/png,image/webp"></div><button class="btn btn-primary" type="button" id="submitSubscriptionPayment">Submit for review</button></div><div class="card"><h3>My payment submissions</h3><div class="table-wrapper"><table><thead><tr><th>Plan</th><th>Submitted</th><th>Status</th></tr></thead><tbody id="subscriptionPaymentRows"><tr><td colspan="3">No payment submissions yet.</td></tr></tbody></table></div></div>';
+    content.append(page);
+    document.getElementById('paymentProof').addEventListener('change', (event) => {
+      selectedPaymentProof = '';
+      const file = event.target.files[0];
+      if (!file) return;
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 1024 * 1024) {
+        event.target.value = '';
+        showSubscriptionPaymentMessage('Choose a JPEG, PNG, or WebP image no larger than 1 MB.');
+        return;
+      }
+      const reader = new FileReader();
+      reader.addEventListener('load', () => {
+        selectedPaymentProof = typeof reader.result === 'string' ? reader.result : '';
+      });
+      reader.addEventListener('error', () => {
+        showSubscriptionPaymentMessage('The payment image could not be read. Please choose it again.');
+      });
+      reader.readAsDataURL(file);
+    });
+    document.getElementById('submitSubscriptionPayment').addEventListener('click', submitSubscriptionPayment);
+  }
+
+  function showSubscriptionPaymentMessage(message, type = 'info') {
+    const target = document.getElementById('subscriptionPaymentMessage');
+    if (!target) return;
+    target.replaceChildren();
+    const alert = document.createElement('div');
+    alert.className = `alert alert-${type}`;
+    alert.textContent = message;
+    target.append(alert);
+  }
+
+  async function loadSubscriptionPayments() {
+    const { payments } = await apiRequest('/api/subscription/payments');
+    const rows = document.getElementById('subscriptionPaymentRows');
+    if (!rows) return;
+    rows.replaceChildren();
+    if (!payments.length) {
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 3;
+      cell.textContent = 'No payment submissions yet.';
+      row.append(cell);
+      rows.append(row);
+      return;
+    }
+    payments.forEach((payment) => {
+      const row = document.createElement('tr');
+      [payment.requestedPlan, new Date(payment.createdAt).toLocaleString(), payment.status].forEach((value) => {
+        const cell = document.createElement('td');
+        cell.textContent = value;
+        row.append(cell);
+      });
+      rows.append(row);
+    });
+  }
+
+  async function submitSubscriptionPayment() {
+    const requestedPlan = document.getElementById('subscriptionPlan').value;
+    const paymentReference = document.getElementById('paymentReference').value.trim();
+    const file = document.getElementById('paymentProof').files[0];
+    if (!paymentReference || !file || !selectedPaymentProof) {
+      showSubscriptionPaymentMessage('Enter the payment reference and select a valid receipt image.', 'danger');
+      return;
+    }
+    const button = document.getElementById('submitSubscriptionPayment');
+    button.disabled = true;
+    try {
+      const result = await apiRequest('/api/subscription/payments', {
+        method: 'POST',
+        body: JSON.stringify({ requestedPlan, paymentReference, proof: selectedPaymentProof })
+      });
+      document.getElementById('paymentReference').value = '';
+      document.getElementById('paymentProof').value = '';
+      selectedPaymentProof = '';
+      await loadSubscriptionPayments();
+      showSubscriptionPaymentMessage(result.message, 'success');
+    } catch (error) {
+      showSubscriptionPaymentMessage(error.message, 'danger');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   const registerLink = document.createElement('button');
   registerLink.type = 'button';
   registerLink.className = 'btn btn-light full register-link';
   registerLink.textContent = 'Create an account';
   registerLink.addEventListener('click', () => window.openRegister());
   document.querySelector('.login-box .btn-primary')?.after(registerLink);
-  removeUnavailableDemoFeatures();
+  removeUnavailableFeatures();
 
   function updateAccountHeader(user) {
     const name = user.name || user.email;
@@ -216,6 +316,12 @@
     document.querySelectorAll('#profile .profile-header h2').forEach((item) => {
       item.textContent = user.name;
     });
+    const profileAvatar = document.querySelector('#profile .big-avatar');
+    if (profileAvatar) {
+      profileAvatar.textContent = name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
+    }
+    const profilePlan = document.getElementById('profilePlan');
+    if (profilePlan) profilePlan.textContent = user.plan || 'Basic';
   }
 
   function updateDashboardLinks(role) {
@@ -297,18 +403,20 @@
   function updateDashboard(data) {
     currentUser = data.user;
     apiTasks = data.tasks;
-    removeUnavailableDemoFeatures();
+    removeUnavailableFeatures();
     updateDashboardLinks(data.user.role);
+    setupSubscriptionPayments();
     window.balance = data.stats.balance;
     window.updateBalance();
     window.updateLevelChallenge();
     updateAccountHeader(data.user);
 
-    const amounts = document.querySelectorAll('#dashboard .stat-card .amount');
-    if (amounts[0]) amounts[0].textContent = currency(data.stats.balance);
-    if (amounts[1]) amounts[1].textContent = currency(data.stats.totalEarnings);
-    if (amounts[2]) amounts[2].textContent = currency(data.stats.referralEarnings);
-    if (amounts[3]) amounts[3].textContent = String(data.stats.tasksCompleted);
+    const balance = document.getElementById('balance');
+    const totalEarnings = document.getElementById('totalEarnings');
+    const tasksCompleted = document.getElementById('tasksCompleted');
+    if (balance) balance.textContent = currency(data.stats.balance);
+    if (totalEarnings) totalEarnings.textContent = currency(data.stats.totalEarnings);
+    if (tasksCompleted) tasksCompleted.textContent = String(data.stats.tasksCompleted);
 
     const walletStats = document.querySelectorAll('#wallet .grid-3 h2');
     if (walletStats[0]) walletStats[0].textContent = currency(data.user.wallet.totalDeposits);
@@ -322,56 +430,49 @@
     if (taskStats[1]) taskStats[1].textContent = `${completedToday.length} / ${data.tasks.length}`;
     if (taskStats[2]) taskStats[2].textContent = String(data.tasks.length - completedToday.length);
 
-    const builtInTitles = new Set([
-      'Daily App Check',
-      'Quick Survey',
-      'Product Research',
-      'App Engagement',
-      'Survey',
-      'Review Task'
-    ]);
-    document.querySelectorAll('#tasks .task-list .published-task').forEach((item) => item.remove());
-    data.tasks.filter((task) => !builtInTitles.has(task.title)).forEach((task) => {
-      const item = document.createElement('div');
-      item.className = 'task published-task';
-      const info = document.createElement('div');
-      info.className = 'task-info';
-      const details = document.createElement('div');
-      const title = document.createElement('h4');
-      title.textContent = task.title;
-      const description = document.createElement('p');
-      description.textContent = task.description;
-      details.append(title, description);
-      if (task.video) {
-        const link = document.createElement('a');
-        link.href = task.video;
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        link.textContent = 'Open task video';
-        details.append(link);
+    const taskLists = document.querySelectorAll('#dashboard .task-list, #tasks .task-list');
+    taskLists.forEach((list) => {
+      list.replaceChildren();
+      if (!data.tasks.length) {
+        const message = document.createElement('p');
+        message.className = 'muted';
+        message.textContent = 'No tasks are available right now.';
+        list.append(message);
+        return;
       }
-      info.append(details);
-      const action = document.createElement('div');
-      const reward = document.createElement('div');
-      reward.className = 'reward';
-      reward.textContent = `+${currency(task.reward)}`;
-      const button = document.createElement('button');
-      button.className = 'btn btn-success';
-      button.textContent = task.available ? 'Complete' : 'Completed today';
-      button.disabled = !task.available;
-      button.onclick = () => window.completeTask(button, task.reward, task.title, task.id);
-      action.append(reward, button);
-      item.append(info, action);
-      document.querySelector('#tasks .task-list')?.append(item);
-    });
 
-    data.tasks.forEach((task) => {
-      document.querySelectorAll('#dashboard .task button').forEach((button) => {
-        const handler = button.getAttribute('onclick') || '';
-        if (handler.includes(`'${task.title}'`)) {
-          button.disabled = !task.available;
-          if (!task.available) button.textContent = 'Completed today';
+      data.tasks.forEach((task) => {
+        const item = document.createElement('div');
+        item.className = 'task';
+        const info = document.createElement('div');
+        info.className = 'task-info';
+        const details = document.createElement('div');
+        const title = document.createElement('h4');
+        title.textContent = task.title;
+        const description = document.createElement('p');
+        description.textContent = task.description;
+        details.append(title, description);
+        if (task.video) {
+          const link = document.createElement('a');
+          link.href = task.video;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = 'Open task video';
+          details.append(link);
         }
+        info.append(details);
+        const action = document.createElement('div');
+        const reward = document.createElement('div');
+        reward.className = 'reward';
+        reward.textContent = `+${currency(task.reward)}`;
+        const button = document.createElement('button');
+        button.className = 'btn btn-success';
+        button.textContent = task.available ? 'Complete' : 'Completed today';
+        button.disabled = !task.available;
+        button.onclick = () => window.completeTask(button, task.reward, task.title, task.id);
+        action.append(reward, button);
+        item.append(info, action);
+        list.append(item);
       });
     });
 
@@ -381,6 +482,7 @@
   async function loadDashboard() {
     const result = await apiRequest('/api/dashboard');
     updateDashboard(result);
+    await loadSubscriptionPayments();
     return result;
   }
 
@@ -406,6 +508,14 @@
       });
       localStorage.setItem(tokenKey, result.token);
       clearLoginMessage();
+      if (result.user.role === 'admin') {
+        window.location.replace('/admin');
+        return;
+      }
+      if (result.user.role === 'senior_admin') {
+        window.location.replace('/senior');
+        return;
+      }
       await loadDashboard();
       setVisibleState(true);
       showRenewalNotification();
@@ -574,6 +684,11 @@
   async function restoreSession() {
     if (!localStorage.getItem(tokenKey)) return;
     try {
+      const { user } = await apiRequest('/api/me');
+      if (user.role === 'admin') {
+        window.location.replace('/admin');
+        return;
+      }
       await loadDashboard();
       setVisibleState(true);
     } catch (error) {
