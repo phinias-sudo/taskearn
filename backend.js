@@ -20,6 +20,7 @@ const userSchema = new mongoose.Schema({
   role: { type: String, enum: ['member', 'admin', 'senior_admin'], default: 'member' },
   status: { type: String, enum: ['active', 'suspended'], default: 'active' },
   plan: { type: String, default: 'Basic' },
+  subscriptionActive: { type: Boolean, default: false },
   createdAt: { type: String, required: true },
   memberType: { type: String, required: true },
   availableBalance: { type: Number, default: 0 },
@@ -198,6 +199,18 @@ async function requireRole(req, res, allowedRoles) {
   return user;
 }
 
+function hasTaskAccess(user) {
+  return user.role === 'senior_admin' || user.subscriptionActive === true;
+}
+
+function requireActiveSubscription(user, res) {
+  if (hasTaskAccess(user)) return true;
+  res.status(403).json({
+    message: 'An approved subscription is required to access daily tasks. Submit your payment receipt and wait for admin verification.'
+  });
+  return false;
+}
+
 function getToday() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -234,6 +247,16 @@ async function ensureRoleAccount({ email: configuredEmail, password, name, role,
     password,
     role
   }));
+}
+
+async function migrateApprovedSubscriptions() {
+  const approvedUserIds = await SubscriptionPayment.distinct('userId', { status: 'approved' });
+  if (approvedUserIds.length) {
+    await User.updateMany(
+      { id: { $in: approvedUserIds }, subscriptionActive: { $exists: false } },
+      { $set: { subscriptionActive: true } }
+    );
+  }
 }
 
 app.get('/api/health', (req, res) => {
@@ -317,29 +340,36 @@ app.get('/api/dashboard', async (req, res) => {
   const user = await requireRole(req, res, ['member', 'senior_admin']);
   if (!user) return;
 
-  const today = getToday();
-  if (user.completedToday.date !== today) {
-    user.completedToday = { date: today, taskIds: [] };
-    await user.save();
+  const subscriptionActive = hasTaskAccess(user);
+  let availableTasks = [];
+  if (subscriptionActive) {
+    const today = getToday();
+    if (user.completedToday.date !== today) {
+      user.completedToday = { date: today, taskIds: [] };
+      await user.save();
+    }
+    availableTasks = (await getAllTasks()).map((task) => ({
+      ...task,
+      available: !user.completedToday.taskIds.includes(task.id)
+    }));
   }
   res.json({
     user: sanitizeUser(user),
+    subscriptionActive,
     stats: {
       balance: user.availableBalance,
       totalEarnings: user.totalEarnings,
       referralEarnings: user.referralEarnings,
       tasksCompleted: user.tasksCompleted
     },
-    tasks: (await getAllTasks()).map((task) => ({
-      ...task,
-      available: !user.completedToday.taskIds.includes(task.id)
-    }))
+    tasks: availableTasks
   });
 });
 
 app.get('/api/tasks', async (req, res) => {
   const user = await requireRole(req, res, ['member', 'senior_admin']);
   if (!user) return;
+  if (!requireActiveSubscription(user, res)) return;
 
   const today = getToday();
   if (user.completedToday.date !== today) {
@@ -357,6 +387,7 @@ app.get('/api/tasks', async (req, res) => {
 app.post('/api/tasks/:taskId/complete', async (req, res) => {
   const user = await requireRole(req, res, ['member', 'senior_admin']);
   if (!user) return;
+  if (!requireActiveSubscription(user, res)) return;
 
   const task = (await getAllTasks()).find((item) => item.id === req.params.taskId);
   if (!task) return res.status(404).json({ message: 'Task not found.' });
@@ -446,6 +477,7 @@ app.post('/api/subscription/payments', async (req, res) => {
       createdAt: payment.createdAt
     }
   });
+
 });
 
 app.get('/api/subscription/payments', async (req, res) => {
@@ -617,7 +649,10 @@ app.post('/api/admin/subscription-payments/:id/review', async (req, res) => {
       payment.status = status;
       payment.reviewedAt = new Date().toISOString();
       payment.reviewedBy = admin.id;
-      if (status === 'approved') user.plan = payment.requestedPlan;
+      if (status === 'approved') {
+        user.plan = payment.requestedPlan;
+        user.subscriptionActive = true;
+      }
       await payment.save({ session });
       await user.save({ session });
     });
@@ -627,7 +662,7 @@ app.post('/api/admin/subscription-payments/:id/review', async (req, res) => {
 
   res.json({
     message: status === 'approved'
-      ? `Payment verified. The member's plan is now ${payment.requestedPlan}; no wallet funds were added.`
+      ? `Payment verified. The member's ${payment.requestedPlan} plan is active and daily tasks are unlocked; no wallet funds were added.`
       : 'Payment rejected. No wallet funds were added.',
     payment: { id: payment.id, status: payment.status, requestedPlan: payment.requestedPlan }
   });
@@ -817,6 +852,7 @@ async function startServer() {
   }
 
   await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
+  await migrateApprovedSubscriptions();
   await ensureRoleAccount({
     email: process.env.ADMIN_EMAIL,
     password: process.env.ADMIN_PASSWORD,

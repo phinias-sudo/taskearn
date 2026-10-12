@@ -197,6 +197,7 @@
 
     const navItem = document.createElement('div');
     navItem.className = 'nav-item';
+    navItem.classList.add('subscription-nav-link');
     navItem.textContent = 'Subscription Payments';
     navItem.addEventListener('click', () => window.showPage('subscription-payments', navItem));
     nav.append(navItem);
@@ -204,7 +205,7 @@
     const page = document.createElement('section');
     page.className = 'page';
     page.id = 'subscription-payments';
-    page.innerHTML = '<div class="page-title"><h1>Subscription payments</h1><p>Upload proof after paying. An admin will verify the payment before your selected plan is activated. Approving a subscription never adds funds to your wallet.</p></div><div id="subscriptionPaymentMessage" aria-live="polite"></div><div class="card"><div class="form-group"><label for="subscriptionPlan">Requested plan</label><select id="subscriptionPlan"><option value="Basic">Basic</option><option value="Premium">Premium</option><option value="VIP">VIP</option></select></div><div class="form-group"><label for="paymentReference">Payment reference</label><input id="paymentReference" maxlength="100" placeholder="Enter the transaction reference"></div><div class="form-group"><label for="paymentProof">Payment receipt image (JPEG, PNG, or WebP; max 1 MB)</label><input id="paymentProof" type="file" accept="image/jpeg,image/png,image/webp"></div><button class="btn btn-primary" type="button" id="submitSubscriptionPayment">Submit for review</button></div><div class="card"><h3>My payment submissions</h3><div class="table-wrapper"><table><thead><tr><th>Plan</th><th>Submitted</th><th>Status</th></tr></thead><tbody id="subscriptionPaymentRows"><tr><td colspan="3">No payment submissions yet.</td></tr></tbody></table></div></div>';
+    page.innerHTML = '<div class="page-title"><h1>Subscription payments</h1><p>Pay for your chosen plan, then upload the payment reference and receipt. Daily tasks unlock after an admin verifies your payment. Approval activates your plan and does not add money to your wallet.</p></div><div id="subscriptionPaymentMessage" aria-live="polite"></div><div class="card"><div class="form-group"><label for="subscriptionPlan">Requested plan</label><select id="subscriptionPlan"><option value="Basic">Basic</option><option value="Premium">Premium</option><option value="VIP">VIP</option></select></div><div class="form-group"><label for="paymentReference">Payment reference</label><input id="paymentReference" maxlength="100" placeholder="Enter the transaction reference"></div><div class="form-group"><label for="paymentProof">Payment receipt image (JPEG, PNG, or WebP; max 1 MB)</label><input id="paymentProof" type="file" accept="image/jpeg,image/png,image/webp"></div><button class="btn btn-primary" type="button" id="submitSubscriptionPayment">Submit for review</button> <button class="btn btn-light" type="button" id="refreshSubscriptionAccess">Refresh subscription status</button></div><div class="card"><h3>My payment submissions</h3><div class="table-wrapper"><table><thead><tr><th>Plan</th><th>Submitted</th><th>Status</th></tr></thead><tbody id="subscriptionPaymentRows"><tr><td colspan="3">No payment submissions yet.</td></tr></tbody></table></div></div>';
     content.append(page);
     document.getElementById('paymentProof').addEventListener('change', (event) => {
       selectedPaymentProof = '';
@@ -225,6 +226,7 @@
       reader.readAsDataURL(file);
     });
     document.getElementById('submitSubscriptionPayment').addEventListener('click', submitSubscriptionPayment);
+    document.getElementById('refreshSubscriptionAccess').addEventListener('click', refreshSubscriptionAccess);
   }
 
   function showSubscriptionPaymentMessage(message, type = 'info') {
@@ -241,6 +243,7 @@
     const { payments } = await apiRequest('/api/subscription/payments');
     const rows = document.getElementById('subscriptionPaymentRows');
     if (!rows) return;
+    updateSubscriptionNotices(payments);
     rows.replaceChildren();
     if (!payments.length) {
       const row = document.createElement('tr');
@@ -259,6 +262,39 @@
         row.append(cell);
       });
       rows.append(row);
+    });
+  }
+
+  function updateSubscriptionNotices(payments = []) {
+    const notices = document.querySelectorAll('#subscriptionAccessDashboard, #subscriptionAccessTasks');
+    if (!notices.length || !currentUser || currentUser.role === 'senior_admin') return;
+    if (currentUser.subscriptionActive) {
+      notices.forEach((notice) => {
+        notice.hidden = true;
+        notice.replaceChildren();
+      });
+      return;
+    }
+
+    const latestPayment = payments[0];
+    const message = latestPayment?.status === 'pending'
+      ? 'Your payment is awaiting admin verification. Daily tasks will unlock after approval.'
+      : latestPayment?.status === 'rejected'
+        ? 'Your last payment was not approved. Submit a valid payment receipt to request verification and unlock daily tasks.'
+        : 'An approved subscription is required to access daily tasks. Submit your subscription payment receipt for admin verification.';
+
+    notices.forEach((notice) => {
+      notice.hidden = false;
+      notice.replaceChildren(document.createTextNode(message));
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn btn-primary u-margin-left-10px';
+      button.textContent = 'Subscription payments';
+      button.addEventListener('click', () => {
+        const navItem = document.querySelector('.sidebar .nav-item.subscription-nav-link');
+        window.showPage('subscription-payments', navItem);
+      });
+      notice.append(document.createTextNode(' '), button);
     });
   }
 
@@ -282,6 +318,23 @@
       selectedPaymentProof = '';
       await loadSubscriptionPayments();
       showSubscriptionPaymentMessage(result.message, 'success');
+    } catch (error) {
+      showSubscriptionPaymentMessage(error.message, 'danger');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function refreshSubscriptionAccess() {
+    const button = document.getElementById('refreshSubscriptionAccess');
+    button.disabled = true;
+    try {
+      const data = await apiRequest('/api/dashboard');
+      updateDashboard(data);
+      await loadSubscriptionPayments();
+      showSubscriptionPaymentMessage(data.subscriptionActive
+        ? `Your ${data.user.plan} subscription is active. Daily tasks are now unlocked.`
+        : 'Your subscription is not active yet. Tasks unlock after an admin approves your payment.', data.subscriptionActive ? 'success' : 'info');
     } catch (error) {
       showSubscriptionPaymentMessage(error.message, 'danger');
     } finally {
