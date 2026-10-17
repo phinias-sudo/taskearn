@@ -634,8 +634,18 @@
         body: JSON.stringify({ name, email, password })
       });
       localStorage.setItem(tokenKey, result.token);
+      try {
+        await loadDashboard();
+      } catch (error) {
+        localStorage.removeItem(tokenKey);
+        closeModal('registerModal');
+        showLoginMessage(
+          `Your account was created, but we could not start your session. Please sign in with your new account. ${error.message}`,
+          'info'
+        );
+        return;
+      }
       closeModal('registerModal');
-      await loadDashboard();
       setVisibleState(true);
       showRenewalNotification();
     } catch (error) {

@@ -846,7 +846,41 @@ app.get(['/senior', '/senior.html', '/senior/index.html', '/dashboards/senior', 
   if (!await requireRole(req, res, ['senior_admin'])) return;
   res.sendFile(path.join(__dirname, 'senior', 'index.html'));
 });
+app.get('/api/admin/users-list', async (req,res)=>{
+  if (!await requireRole(req, res, ['admin','senior_admin'])) return;
+  const users = await User.find();
+  res.json(users);
+});
 
+app.post('/api/admin/approve-user/:id', async (req,res)=>{
+  if (!await requireRole(req, res, ['admin','senior_admin'])) return;
+  await User.findByIdAndUpdate(req.params.id, {status:'approved', isApproved:true});
+  res.json({success:true});
+});
+
+app.post('/api/admin/block-user/:id', async (req,res)=>{
+  if (!await requireRole(req, res, ['admin','senior_admin'])) return;
+  await User.findByIdAndUpdate(req.params.id, {status:'blocked'});
+  res.json({success:true});
+});
+
+app.delete('/api/admin/delete-user/:id', async (req,res)=>{
+  if (!await requireRole(req, res, ['admin','senior_admin'])) return;
+  await User.findByIdAndDelete(req.params.id);
+  res.json({success:true});
+});
+
+app.get('/api/admin/tasks-pending', async (req,res)=>{
+  if (!await requireRole(req, res, ['admin','senior_admin'])) return;
+  const tasks = await Task.find({status:'pending'});
+  res.json(tasks);
+});
+
+app.post('/api/admin/approve-task/:id', async (req,res)=>{
+  if (!await requireRole(req, res, ['admin','senior_admin'])) return;
+  await Task.findByIdAndUpdate(req.params.id, {status:'approved'});
+  res.json({success:true});
+});
 app.use(express.static(__dirname));
 
 app.use((req, res) => {

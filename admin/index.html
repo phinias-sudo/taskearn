@@ -7,9 +7,19 @@
 <style>
 :root{font-family:Arial,Helvetica,sans-serif;color:#1f2937;background:#f5f8fc;--navy:#14213d;--blue:#1877f2;--muted:#64748b;--line:#e5e7eb}*{box-sizing:border-box}body{margin:0}.shell{display:grid;grid-template-columns:230px 1fr;min-height:100vh}.sidebar{padding:24px 16px;background:var(--navy);color:#fff}.brand{font-size:22px;font-weight:800;padding:0 10px 20px}.nav{display:grid;gap:6px}.nav button,.logout{width:100%;padding:12px;border:0;border-radius:7px;text-align:left;color:#e2e8f0;background:transparent;font:inherit;cursor:pointer}.nav button.active,.nav button:hover{background:var(--blue);color:#fff}.logout{margin-top:24px;border:1px solid #ffffff40}.main{min-width:0}.topbar{position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:18px 28px;background:#fff;border-bottom:1px solid var(--line)}.topbar h1{font-size:20px;margin:0;color:var(--navy)}.links{display:flex;gap:9px}.links a{padding:9px 12px;border:1px solid var(--line);border-radius:7px;color:var(--navy);text-decoration:none}.content{max-width:1300px;margin:auto;padding:26px}.page[hidden],.nav button[hidden]{display:none}.page{display:none}.page.active{display:block}.page h2{margin-top:0;color:var(--navy)}.muted{color:var(--muted)}.notice{display:none;margin:0 0 18px;padding:13px;border-radius:7px;background:#fee2e2;color:#7f1d1d}.notice.visible{display:block}.toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}.table-wrap{overflow:auto;background:#fff;border:1px solid var(--line);border-radius:9px}table{width:100%;border-collapse:collapse;min-width:650px}th,td{padding:13px 15px;text-align:left;border-bottom:1px solid var(--line);font-size:13px}th{background:#f8fafc;color:var(--muted);font-size:11px;text-transform:uppercase}tr:last-child td{border-bottom:0}.btn{padding:9px 13px;border:0;border-radius:7px;background:var(--blue);color:#fff;font:inherit;font-weight:700;cursor:pointer}.btn:disabled{opacity:.6;cursor:wait}.btn.secondary{background:#eaf2ff;color:var(--blue)}.btn.success{background:#e9f8f0;color:#137044}.btn.danger{background:#fff0f1;color:#b91c1c}.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}.form-grid label{display:grid;gap:6px;font-size:13px;font-weight:700}.form-grid input,.form-grid select,.form-grid textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:7px;font:inherit}.form-grid textarea{min-height:90px;resize:vertical}.form-grid .full{grid-column:1/-1}.card{padding:18px;background:#fff;border:1px solid var(--line);border-radius:9px;margin-bottom:16px}.badge{padding:5px 9px;border-radius:99px;font-size:11px;font-weight:700}.badge.pending{background:#fff3dd;color:#9a5700}.badge.approved{background:#e7f7ef;color:#137044}.badge.rejected{background:#ffebee;color:#b91c1c}@media(max-width:760px){.shell{grid-template-columns:1fr}.sidebar{position:static;padding:12px}.brand{padding-bottom:10px}.nav{grid-template-columns:repeat(2,1fr)}.logout{margin-top:8px}.topbar{padding:14px 18px}.content{padding:18px}.form-grid{grid-template-columns:1fr}.form-grid .full{grid-column:auto}}
 </style>
-<style>html:not(.authorized){visibility:hidden}</style>
+<style>
+html:not(.authorized) .shell{display:none}
+html.authorized #adminAuthStatus{display:none}
+.auth-status{max-width:520px;margin:12vh auto;padding:24px;background:#fff;border:1px solid var(--line);border-radius:10px;line-height:1.5}
+.auth-status a{color:var(--blue)}
+</style>
 </head>
 <body>
+<section class="auth-status" id="adminAuthStatus" role="status" aria-live="polite">
+  <h1>Loading admin dashboard</h1>
+  <p id="adminAuthMessage">Checking your administrator session…</p>
+  <a href="/">Return to sign in</a>
+</section>
 <div class="shell">
   <aside class="sidebar">
     <div class="brand">TaskEarn Admin</div>
@@ -72,6 +82,6 @@
     </div>
   </main>
 </div>
-<script src="/admin/dashboard.js"></script>
+<script src="./dashboard.js"></script>
 </body>
 </html>

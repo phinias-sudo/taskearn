@@ -19,6 +19,10 @@
     notice.classList.add('visible');
   }
 
+  function showAuthError(message) {
+    document.getElementById('adminAuthMessage').textContent = message;
+  }
+
   async function request(path, options = {}) {
     const headers = new Headers(options.headers || {});
     headers.set('Accept', 'application/json');
@@ -376,12 +380,11 @@
     try {
       const { user } = await request('/api/me');
       if (!['admin', 'senior_admin'].includes(user.role)) {
-        window.location.replace('/');
+        showAuthError('This account does not have administrator access. Sign in with an admin account.');
         return;
       }
 
       configureRole(user.role);
-      document.documentElement.classList.add('authorized');
       await loadUsers();
       if (user.role === 'senior_admin') {
         await Promise.all([loadSummary(), loadTasks(), loadWithdrawals()]);
@@ -389,9 +392,12 @@
         await loadTasks();
       }
       await loadPayments();
+      document.documentElement.classList.add('authorized');
     } catch (error) {
       if (error.status === 401) localStorage.removeItem(tokenKey);
-      window.location.replace('/');
+      showAuthError(error.status === 401
+        ? 'Your administrator session is missing or expired. Return to sign in and log in again.'
+        : `The admin dashboard could not load: ${error.message}`);
     }
   }
 
