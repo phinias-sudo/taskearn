@@ -227,6 +227,20 @@
     });
     document.getElementById('submitSubscriptionPayment').addEventListener('click', submitSubscriptionPayment);
     document.getElementById('refreshSubscriptionAccess').addEventListener('click', refreshSubscriptionAccess);
+    updateSubscriptionPaymentAvailability();
+  }
+
+  function updateSubscriptionPaymentAvailability() {
+    const isActive = currentUser?.subscriptionActive === true;
+    const navItem = document.querySelector('.sidebar .nav-item.subscription-nav-link');
+    const page = document.getElementById('subscription-payments');
+
+    if (isActive && page?.classList.contains('active')) {
+      const dashboardNavItem = document.querySelector('.sidebar .nav-item[onclick*="dashboard"]');
+      window.showPage('dashboard', dashboardNavItem);
+    }
+    if (navItem) navItem.hidden = isActive;
+    if (page) page.hidden = isActive;
   }
 
   function showSubscriptionPaymentMessage(message, type = 'info') {
@@ -266,6 +280,7 @@
   }
 
   function updateSubscriptionNotices(payments = []) {
+    updateSubscriptionPaymentAvailability();
     const notices = document.querySelectorAll('#subscriptionAccessDashboard, #subscriptionAccessTasks');
     if (!notices.length || !currentUser || currentUser.role === 'senior_admin') return;
     if (currentUser.subscriptionActive) {

@@ -53,7 +53,7 @@
         <div class="table-wrap"><table><thead><tr><th>Member</th><th>Requested plan</th><th>Payment reference</th><th>Proof</th><th>Status</th><th>Decision</th></tr></thead><tbody id="paymentRows"><tr><td colspan="6">Loading payment uploads…</td></tr></tbody></table></div>
       </section>
       <section class="page" id="tasks">
-        <div class="toolbar"><div><h2>Published tasks</h2><p class="muted">Create tasks available to members.</p></div><button class="btn" type="button" id="showAddTask">Create task</button></div>
+        <div class="toolbar"><div><h2>Published tasks</h2><p class="muted">Publish tasks to all members with an admin-approved active subscription.</p></div><button class="btn" type="button" id="showAddTask">Create task</button></div>
         <form class="card form-grid" id="addTaskForm" hidden>
           <label>Task name<input name="name" required></label>
           <label>Task type<select name="type"><option value="standard">Standard</option><option value="question">Question</option><option value="video">Video</option></select></label>
@@ -72,6 +72,6 @@
     </div>
   </main>
 </div>
-<script src="/dashboards/admin/dashboard.js"></script>
+<script src="/admin/dashboard.js"></script>
 </body>
 </html>
