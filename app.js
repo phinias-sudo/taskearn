@@ -37,7 +37,7 @@
       }
     }
     if (!response.ok) {
-      if (response.status === 401 && token) {
+      if (response.status === 401 && token && localStorage.getItem(tokenKey) === token) {
         localStorage.removeItem(tokenKey);
       }
       throw new Error(result.message || `Request failed (${response.status}).`);
@@ -760,16 +760,20 @@
   if (emailLabel) emailLabel.textContent = 'Email Address';
 
   async function restoreSession() {
-    if (!localStorage.getItem(tokenKey)) return;
+    const token = localStorage.getItem(tokenKey);
+    if (!token) return;
     try {
       const { user } = await apiRequest('/api/me');
+      if (localStorage.getItem(tokenKey) !== token) return;
       if (user.role === 'admin') {
         window.location.replace('/admin');
         return;
       }
       await loadDashboard();
+      if (localStorage.getItem(tokenKey) !== token) return;
       setVisibleState(true);
     } catch (error) {
+      if (localStorage.getItem(tokenKey) !== token) return;
       localStorage.removeItem(tokenKey);
       setVisibleState(false);
       showLoginMessage(
