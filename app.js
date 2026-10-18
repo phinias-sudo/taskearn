@@ -1,12 +1,6 @@
 (() => {
-  const tokenKey = 'taskearnApiToken';
-  const localHosts = new Set(['localhost', '127.0.0.1']);
-  ['taskearnAccounts', 'taskearnTasks', 'taskearnLoginFailures', 'taskearnLoginClaims', 'taskearnAdminAccountRequest']
-    .forEach((key) => localStorage.removeItem(key));
-  const apiBaseUrl = location.protocol === 'file:'
-    || (localHosts.has(location.hostname) && location.port !== '5000')
-    ? 'http://localhost:5000'
-    : '';
+   const tokenKey = 'taskearnToken';
+  const apiBase = location.protocol === 'file:' ? 'http://localhost:5000' : '';
   let apiTasks = [];
   let currentUser = null;
   let busy = false;
@@ -22,7 +16,7 @@
 
     let response;
     try {
-      response = await fetch(`${apiBaseUrl}${url}`, { ...options, headers });
+      response = await fetch(`${apiBase}${url}`, { ...options, headers });
     } catch (error) {
       throw new Error('Cannot reach the TaskEarn server at http://localhost:5000. Open a terminal in the project folder and run npm.cmd start, then retry.');
     }
