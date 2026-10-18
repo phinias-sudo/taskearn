@@ -6,6 +6,9 @@
   const taskRows = document.getElementById('taskRows');
   const withdrawalRows = document.getElementById('withdrawalRows');
   const paymentRows = document.getElementById('paymentRows');
+  let userPagination = { page: 1, limit: 25, total: 0, totalPages: 1 };
+  let userRequestId = 0;
+  let userSearchTimer;
   const headings = {
     overview: 'Platform Overview',
     users: 'Member Accounts',
@@ -72,6 +75,7 @@
     row.append(member);
     cell(row, user.plan || 'Basic');
     cell(row, user.status === 'suspended' ? 'Suspended' : 'Active');
+    cell(row, user.subscriptionActive ? 'Active' : 'Inactive');
     cell(row, `KES ${Number(user.availableBalance).toLocaleString()}`);
     cell(row, Number(user.tasksCompleted).toLocaleString());
     cell(row, new Date(user.createdAt).toLocaleDateString());
@@ -171,10 +175,38 @@
     withdrawalRows.append(row);
   }
 
-  async function loadUsers() {
-    const { users } = await request('/api/admin/users');
+  async function loadUsers(page = userPagination.page) {
+    const params = new URLSearchParams({
+      page: String(page),
+      limit: document.getElementById('userPageSize').value,
+      search: document.getElementById('userSearch').value.trim(),
+      status: document.getElementById('userStatusFilter').value,
+      subscription: document.getElementById('userSubscriptionFilter').value
+    });
+    const requestId = ++userRequestId;
+    const result = await request(`/api/admin/users?${params}`);
+    if (requestId !== userRequestId) return;
+    if (page > result.pagination.totalPages) {
+      return loadUsers(result.pagination.totalPages);
+    }
+    userPagination = result.pagination;
+    renderUsers(result.users);
+  }
+
+  function renderUsers(users) {
+    const { page, limit, total, totalPages } = userPagination;
+    const firstAccount = total ? (page - 1) * limit + 1 : 0;
+    const lastAccount = Math.min(page * limit, total);
+    document.getElementById('userCount').textContent = `Showing ${firstAccount}-${lastAccount} of ${total} accounts`;
+    document.getElementById('userPageLabel').textContent = `Page ${page} of ${totalPages}`;
+    document.getElementById('previousUsersPage').disabled = page <= 1;
+    document.getElementById('nextUsersPage').disabled = page >= totalPages;
+
     if (!users.length) {
-      emptyRow(userRows, 7, 'No member accounts have been created.');
+      const hasFilters = document.getElementById('userSearch').value.trim()
+        || document.getElementById('userStatusFilter').value
+        || document.getElementById('userSubscriptionFilter').value;
+      emptyRow(userRows, 8, hasFilters ? 'No accounts match these filters.' : 'No member accounts have been created.');
       return;
     }
     userRows.replaceChildren();
@@ -320,7 +352,7 @@
       });
       form.reset();
       form.hidden = true;
-      await loadUsers();
+      await loadUsers(1);
       showNotice('Member account created.');
     } catch (error) {
       showNotice(error.message);
@@ -409,6 +441,34 @@
   });
   document.getElementById('cancelAddUser').addEventListener('click', () => {
     document.getElementById('addUserForm').hidden = true;
+  });
+  document.getElementById('userSearch').addEventListener('input', () => {
+    window.clearTimeout(userSearchTimer);
+    userSearchTimer = window.setTimeout(() => {
+      loadUsers(1).catch((error) => showNotice(error.message));
+    }, 250);
+  });
+  ['userStatusFilter', 'userSubscriptionFilter', 'userPageSize'].forEach((id) => {
+    document.getElementById(id).addEventListener('change', () => {
+      loadUsers(1).catch((error) => showNotice(error.message));
+    });
+  });
+  document.getElementById('previousUsersPage').addEventListener('click', () => {
+    loadUsers(userPagination.page - 1).catch((error) => showNotice(error.message));
+  });
+  document.getElementById('nextUsersPage').addEventListener('click', () => {
+    loadUsers(userPagination.page + 1).catch((error) => showNotice(error.message));
+  });
+  document.getElementById('refreshUsers').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await loadUsers();
+    } catch (error) {
+      showNotice(error.message);
+    } finally {
+      button.disabled = false;
+    }
   });
   document.getElementById('showAddTask').addEventListener('click', () => {
     document.getElementById('addTaskForm').hidden = false;

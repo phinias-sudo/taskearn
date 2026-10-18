@@ -598,8 +598,56 @@ app.get('/api/admin/tasks', async (req, res) => {
 app.get('/api/admin/users', async (req, res) => {
   const admin = await requireRole(req, res, ['admin', 'senior_admin']);
   if (!admin) return;
-  const users = await User.find(admin.role === 'admin' ? { role: 'member' } : {});
-  res.json({ users: users.map(sanitizeUser) });
+
+  const page = Number(req.query.page ?? 1);
+  const limit = Number(req.query.limit ?? 25);
+  const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+  const status = typeof req.query.status === 'string' ? req.query.status : '';
+  const subscription = typeof req.query.subscription === 'string' ? req.query.subscription : '';
+  if (!Number.isInteger(page) || page < 1) {
+    return res.status(400).json({ message: 'Page must be a positive whole number.' });
+  }
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    return res.status(400).json({ message: 'Page size must be a whole number from 1 to 100.' });
+  }
+  if (search.length > 100) {
+    return res.status(400).json({ message: 'Search text must be 100 characters or fewer.' });
+  }
+  if (status && !['active', 'suspended'].includes(status)) {
+    return res.status(400).json({ message: 'Choose active or suspended for the account status filter.' });
+  }
+  if (subscription && !['active', 'inactive'].includes(subscription)) {
+    return res.status(400).json({ message: 'Choose active or inactive for the subscription filter.' });
+  }
+
+  const query = {};
+  if (admin.role === 'admin') query.role = 'member';
+  if (status) query.status = status;
+  if (subscription) query.subscriptionActive = subscription === 'active';
+  if (search) {
+    const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    query.$or = [
+      { name: { $regex: escapedSearch, $options: 'i' } },
+      { email: { $regex: escapedSearch, $options: 'i' } }
+    ];
+  }
+
+  const total = await User.countDocuments(query);
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const currentPage = Math.min(page, totalPages);
+  const users = await User.find(query)
+    .sort({ createdAt: -1, _id: -1 })
+    .skip((currentPage - 1) * limit)
+    .limit(limit);
+  res.json({
+    users: users.map(sanitizeUser),
+    pagination: {
+      page: currentPage,
+      limit,
+      total,
+      totalPages
+    }
+  });
 });
 
 app.post('/api/admin/users/:id/status', async (req, res) => {
