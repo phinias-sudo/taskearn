@@ -1,5 +1,5 @@
 (() => {
-  const tokenKey = 'taskearnApiToken';
+  const tokenKey = 'taskearnToken';
   let currentRole = 'admin';
   const notice = document.getElementById('adminNotice');
   const userRows = document.getElementById('userRows');
@@ -9,6 +9,9 @@
   let userPagination = { page: 1, limit: 25, total: 0, totalPages: 1 };
   let userRequestId = 0;
   let userSearchTimer;
+  let currentUserId = '';
+  let visibleUsers = [];
+  let selectedUserIds = new Set();
   const headings = {
     overview: 'Platform Overview',
     users: 'Member Accounts',
@@ -65,6 +68,20 @@
 
   function renderUser(user) {
     const row = document.createElement('tr');
+    const selectionCell = document.createElement('td');
+    const selection = document.createElement('input');
+    selection.type = 'checkbox';
+    selection.className = 'user-selection';
+    selection.checked = selectedUserIds.has(user.id);
+    selection.disabled = user.id === currentUserId;
+    selection.setAttribute('aria-label', `Select ${user.name}`);
+    selection.addEventListener('change', () => {
+      if (selection.checked) selectedUserIds.add(user.id);
+      else selectedUserIds.delete(user.id);
+      updateBulkControls();
+    });
+    selectionCell.append(selection);
+    row.append(selectionCell);
     const member = document.createElement('td');
     const name = document.createElement('strong');
     const email = document.createElement('small');
@@ -83,9 +100,22 @@
     const statusButton = document.createElement('button');
     statusButton.type = 'button';
     statusButton.className = `btn ${user.status === 'suspended' ? 'success' : 'danger'}`;
-    statusButton.textContent = user.status === 'suspended' ? 'Approve' : 'Suspend';
-    statusButton.addEventListener('click', () => updateUserStatus(user, statusButton));
+    statusButton.textContent = user.status === 'suspended' ? 'Reactivate' : 'Suspend';
+    statusButton.disabled = user.id === currentUserId;
+    if (user.id === currentUserId) {
+      statusButton.textContent = 'Current account';
+    } else {
+      statusButton.addEventListener('click', () => updateUserStatus(user, statusButton));
+    }
     actions.append(statusButton);
+    if (user.id !== currentUserId) {
+      const deleteButton = document.createElement('button');
+      deleteButton.type = 'button';
+      deleteButton.className = 'btn danger';
+      deleteButton.textContent = 'Remove';
+      deleteButton.addEventListener('click', () => removeUser(user, deleteButton));
+      actions.append(document.createTextNode(' '), deleteButton);
+    }
     if (currentRole === 'senior_admin') {
       const adjustButton = document.createElement('button');
       adjustButton.type = 'button';
@@ -176,6 +206,8 @@
   }
 
   async function loadUsers(page = userPagination.page) {
+    selectedUserIds.clear();
+    updateBulkControls();
     const params = new URLSearchParams({
       page: String(page),
       limit: document.getElementById('userPageSize').value,
@@ -206,11 +238,28 @@
       const hasFilters = document.getElementById('userSearch').value.trim()
         || document.getElementById('userStatusFilter').value
         || document.getElementById('userSubscriptionFilter').value;
-      emptyRow(userRows, 8, hasFilters ? 'No accounts match these filters.' : 'No member accounts have been created.');
+      visibleUsers = [];
+      updateBulkControls();
+      emptyRow(userRows, 9, hasFilters ? 'No accounts match these filters.' : 'No member accounts have been created.');
       return;
     }
+    visibleUsers = users;
     userRows.replaceChildren();
     users.forEach(renderUser);
+    updateBulkControls();
+  }
+
+  function updateBulkControls() {
+    const manageableIds = visibleUsers.filter((user) => user.id !== currentUserId).map((user) => user.id);
+    const selectedCount = selectedUserIds.size;
+    document.getElementById('selectedUserCount').textContent =
+      `${selectedCount} selected on this page`;
+    document.getElementById('bulkSuspendUsers').disabled = selectedCount === 0;
+    document.getElementById('bulkActivateUsers').disabled = selectedCount === 0;
+    const selectVisible = document.getElementById('selectVisibleUsers');
+    selectVisible.checked = manageableIds.length > 0 && manageableIds.every((id) => selectedUserIds.has(id));
+    selectVisible.indeterminate = selectedCount > 0 && !selectVisible.checked;
+    selectVisible.disabled = manageableIds.length === 0;
   }
 
   async function loadTasks() {
@@ -270,6 +319,8 @@
 
   async function updateUserStatus(user, button) {
     const status = user.status === 'suspended' ? 'active' : 'suspended';
+    const action = status === 'active' ? 'reactivate' : 'suspend';
+    if (!window.confirm(`Are you sure you want to ${action} ${user.name}'s account?`)) return;
     button.disabled = true;
     try {
       await request(`/api/admin/users/${encodeURIComponent(user.id)}/status`, {
@@ -281,6 +332,97 @@
     } catch (error) {
       button.disabled = false;
       showNotice(error.message);
+    }
+  }
+
+  async function updateSelectedUsers(status, button) {
+    const userIds = [...selectedUserIds];
+    if (!userIds.length) return;
+    const action = status === 'active' ? 'reactivate' : 'suspend';
+    if (!window.confirm(`${action[0].toUpperCase()}${action.slice(1)} ${userIds.length} selected account${userIds.length === 1 ? '' : 's'}?`)) return;
+
+    button.disabled = true;
+    try {
+      const result = await request('/api/admin/users/bulk-status', {
+        method: 'POST',
+        body: JSON.stringify({ userIds, status })
+      });
+      await loadUsers();
+      showNotice(result.message);
+    } catch (error) {
+      showNotice(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function removeUser(user, button) {
+    const confirmed = window.confirm(
+      `Remove ${user.name}'s account from the admin dashboard? They will lose access immediately. Account, payment, and transaction history will be retained.`
+    );
+    if (!confirmed) return;
+    button.disabled = true;
+    try {
+      const result = await request(`/api/admin/users/${encodeURIComponent(user.id)}`, { method: 'DELETE' });
+      await loadUsers();
+      showNotice(result.message);
+    } catch (error) {
+      button.disabled = false;
+      showNotice(error.message);
+    }
+  }
+
+  function csvField(value) {
+    let text = String(value ?? '');
+    if (/^\s*[=+\-@]/.test(text)) text = `'${text}`;
+    return `"${text.replaceAll('"', '""')}"`;
+  }
+
+  async function exportUsers(button) {
+    button.disabled = true;
+    try {
+      const filters = new URLSearchParams({
+        limit: '100',
+        search: document.getElementById('userSearch').value.trim(),
+        status: document.getElementById('userStatusFilter').value,
+        subscription: document.getElementById('userSubscriptionFilter').value
+      });
+      const firstPage = await request(`/api/admin/users?${filters}&page=1`);
+      const users = [...firstPage.users];
+      for (let page = 2; page <= firstPage.pagination.totalPages; page += 1) {
+        const params = new URLSearchParams(filters);
+        params.set('page', String(page));
+        const result = await request(`/api/admin/users?${params}`);
+        users.push(...result.users);
+      }
+
+      const columns = ['Account ID', 'Name', 'Email', 'Role', 'Plan', 'Account status', 'Subscription', 'Balance (KES)', 'Tasks completed', 'Joined'];
+      const rows = users.map((user) => [
+        user.id,
+        user.name,
+        user.email,
+        user.role,
+        user.plan || 'Basic',
+        user.status,
+        user.subscriptionActive ? 'Active' : 'Inactive',
+        user.availableBalance,
+        user.tasksCompleted,
+        user.createdAt
+      ]);
+      const csv = `\uFEFF${[columns, ...rows].map((row) => row.map(csvField).join(',')).join('\r\n')}`;
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `taskearn-accounts-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      showNotice(`Exported ${users.length} account${users.length === 1 ? '' : 's'} to CSV.`);
+    } catch (error) {
+      showNotice(`CSV export failed: ${error.message}`);
+    } finally {
+      button.disabled = false;
     }
   }
 
@@ -416,6 +558,7 @@
         return;
       }
 
+      currentUserId = user.id;
       configureRole(user.role);
       await loadUsers();
       if (user.role === 'senior_admin') {
@@ -441,6 +584,26 @@
   });
   document.getElementById('cancelAddUser').addEventListener('click', () => {
     document.getElementById('addUserForm').hidden = true;
+  });
+  document.getElementById('selectVisibleUsers').addEventListener('change', (event) => {
+    visibleUsers.forEach((user) => {
+      if (user.id === currentUserId) return;
+      if (event.currentTarget.checked) selectedUserIds.add(user.id);
+      else selectedUserIds.delete(user.id);
+    });
+    userRows.querySelectorAll('.user-selection').forEach((checkbox) => {
+      if (!checkbox.disabled) checkbox.checked = event.currentTarget.checked;
+    });
+    updateBulkControls();
+  });
+  document.getElementById('bulkSuspendUsers').addEventListener('click', (event) => {
+    updateSelectedUsers('suspended', event.currentTarget);
+  });
+  document.getElementById('bulkActivateUsers').addEventListener('click', (event) => {
+    updateSelectedUsers('active', event.currentTarget);
+  });
+  document.getElementById('exportUsers').addEventListener('click', (event) => {
+    exportUsers(event.currentTarget);
   });
   document.getElementById('userSearch').addEventListener('input', () => {
     window.clearTimeout(userSearchTimer);

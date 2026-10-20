@@ -1,5 +1,5 @@
 (() => {
-  const tokenKey = 'taskearnApiToken';
+  const tokenKey = 'taskearnToken';
   const notice = document.getElementById('dashboardNotice');
 
   function showNotice(message) {

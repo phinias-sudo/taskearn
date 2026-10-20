@@ -32,6 +32,8 @@ const userSchema = new mongoose.Schema({
   passwordHash: { type: String, required: true },
   role: { type: String, enum: ['member', 'admin', 'senior_admin'], default: 'member' },
   status: { type: String, enum: ['active', 'suspended'], default: 'active' },
+  deletedAt: { type: String, default: null },
+  deletedBy: { type: String, default: '' },
   plan: { type: String, default: 'Basic' },
   subscriptionActive: { type: Boolean, default: false },
   createdAt: { type: String, required: true },
@@ -195,6 +197,10 @@ async function requireUser(req, res) {
     res.status(401).json({ message: 'Unauthorized. Please log in again.' });
     return null;
   }
+  if (user.deletedAt) {
+    res.status(403).json({ message: 'This account has been removed. Contact an administrator for assistance.' });
+    return null;
+  }
   if (user.status === 'suspended') {
     res.status(403).json({ message: 'This account is suspended. Contact a senior administrator for assistance.' });
     return null;
@@ -323,6 +329,9 @@ app.post('/api/login', async (req, res) => {
   const user = await User.findOne({ email });
   if (!user || !passwordMatches(password, user.passwordHash)) {
     return res.status(401).json({ message: 'Invalid email or password.' });
+  }
+  if (user.deletedAt) {
+    return res.status(403).json({ message: 'This account has been removed. Contact an administrator for assistance.' });
   }
   if (user.status === 'suspended') {
     return res.status(403).json({ message: 'This account is suspended. Contact a senior administrator for assistance.' });
@@ -621,6 +630,7 @@ app.get('/api/admin/users', async (req, res) => {
   }
 
   const query = {};
+  query.deletedAt = null;
   if (admin.role === 'admin') query.role = 'member';
   if (status) query.status = status;
   if (subscription) query.subscriptionActive = subscription === 'active';
@@ -657,14 +667,62 @@ app.post('/api/admin/users/:id/status', async (req, res) => {
   if (!['active', 'suspended'].includes(status)) {
     return res.status(400).json({ message: 'Choose active or suspended for this account.' });
   }
-  const user = await User.findOne({ id: req.params.id });
+  const user = await User.findOne({ id: req.params.id, deletedAt: null });
   if (!user) return res.status(404).json({ message: 'User account not found.' });
+  if (user.id === admin.id) {
+    return res.status(400).json({ message: 'You cannot change your own administrator account status.' });
+  }
   if (admin.role === 'admin' && user.role !== 'member') {
     return res.status(403).json({ message: 'Regular admins can only manage member accounts.' });
   }
   user.status = status;
   await user.save();
   res.json({ message: status === 'active' ? 'Member account approved.' : 'Member account suspended.', user: sanitizeUser(user) });
+});
+
+app.post('/api/admin/users/bulk-status', async (req, res) => {
+  const admin = await requireRole(req, res, ['admin', 'senior_admin']);
+  if (!admin) return;
+  const userIds = req.body?.userIds;
+  const status = req.body?.status;
+  if (!Array.isArray(userIds) || userIds.length < 1 || userIds.length > 100
+    || userIds.some((id) => typeof id !== 'string' || !id.trim())
+    || new Set(userIds).size !== userIds.length) {
+    return res.status(400).json({ message: 'Select between 1 and 100 unique accounts.' });
+  }
+  if (!['active', 'suspended'].includes(status)) {
+    return res.status(400).json({ message: 'Choose active or suspended for these accounts.' });
+  }
+  if (userIds.includes(admin.id)) {
+    return res.status(400).json({ message: 'You cannot change your own account using a bulk action.' });
+  }
+
+  const query = { id: { $in: userIds }, deletedAt: null };
+  if (admin.role === 'admin') query.role = 'member';
+  const result = await User.updateMany(query, { $set: { status } });
+  res.json({
+    message: `${result.modifiedCount} account${result.modifiedCount === 1 ? '' : 's'} ${status === 'active' ? 'reactivated' : 'suspended'}.`,
+    updatedCount: result.modifiedCount
+  });
+});
+
+app.delete('/api/admin/users/:id', async (req, res) => {
+  const admin = await requireRole(req, res, ['admin', 'senior_admin']);
+  if (!admin) return;
+  if (req.params.id === admin.id) {
+    return res.status(400).json({ message: 'You cannot remove your own administrator account.' });
+  }
+  const query = { id: req.params.id, deletedAt: null };
+  if (admin.role === 'admin') query.role = 'member';
+  const user = await User.findOne(query);
+  if (!user) return res.status(404).json({ message: 'Account not found or not available for removal.' });
+
+  user.status = 'suspended';
+  user.deletedAt = new Date().toISOString();
+  user.deletedBy = admin.id;
+  await user.save();
+  await LoginSession.deleteMany({ userId: user.id });
+  res.json({ message: 'Account removed from the dashboard. Account and payment history are retained.' });
 });
 
 app.get('/api/admin/subscription-payments', async (req, res) => {
@@ -701,7 +759,7 @@ app.post('/api/admin/subscription-payments/:id/review', async (req, res) => {
   if (payment.status !== 'pending') {
     return res.status(409).json({ message: 'This subscription payment has already been reviewed.' });
   }
-  const user = await User.findOne({ id: payment.userId });
+  const user = await User.findOne({ id: payment.userId, deletedAt: null });
   if (!user) return res.status(404).json({ message: 'The member account for this payment no longer exists.' });
   if (admin.role === 'admin' && user.role !== 'member') {
     return res.status(403).json({ message: 'Regular admins can only review member payments.' });
@@ -743,7 +801,7 @@ app.post('/api/admin/users/:id/balance-adjustments', async (req, res) => {
   if (!reason || reason.length > 500) {
     return res.status(400).json({ message: 'A reason of up to 500 characters is required.' });
   }
-  const user = await User.findOne({ id: req.params.id });
+  const user = await User.findOne({ id: req.params.id, deletedAt: null });
   if (!user) return res.status(404).json({ message: 'User account not found.' });
   if (user.availableBalance + amount < 0) {
     return res.status(400).json({ message: 'This adjustment cannot make the wallet balance negative.' });
@@ -885,39 +943,13 @@ app.get('/', (req, res) => {
 
 app.get(['/admin', '/admin.html', '/admin/index.html', '/dashboards/admin', '/dashboards/admin/index.html'], async (req, res) => {
   res.set('Cache-Control', 'private, no-store');
-  if (!await requireRole(req, res, ['admin', 'senior_admin'])) return;
   res.sendFile(path.join(__dirname, 'admin', 'index.html'));
 });
 
 app.get(['/senior', '/senior.html', '/senior/index.html', '/dashboards/senior', '/dashboards/senior/index.html'], async (req, res) => {
   res.set('Cache-Control', 'private, no-store');
-  if (!await requireRole(req, res, ['senior_admin'])) return;
   res.sendFile(path.join(__dirname, 'senior', 'index.html'));
 });
-app.get('/api/admin/users-list', async (req,res)=>{
-  if (!await requireRole(req, res, ['admin','senior_admin'])) return;
-  const users = await User.find();
-  res.json(users);
-});
-
-app.post('/api/admin/approve-user/:id', async (req,res)=>{
-  if (!await requireRole(req, res, ['admin','senior_admin'])) return;
-  await User.findByIdAndUpdate(req.params.id, {status:'approved', isApproved:true});
-  res.json({success:true});
-});
-
-app.post('/api/admin/block-user/:id', async (req,res)=>{
-  if (!await requireRole(req, res, ['admin','senior_admin'])) return;
-  await User.findByIdAndUpdate(req.params.id, {status:'blocked'});
-  res.json({success:true});
-});
-
-app.delete('/api/admin/delete-user/:id', async (req,res)=>{
-  if (!await requireRole(req, res, ['admin','senior_admin'])) return;
-  await User.findByIdAndDelete(req.params.id);
-  res.json({success:true});
-});
-
 app.get('/api/admin/tasks-pending', async (req,res)=>{
   if (!await requireRole(req, res, ['admin','senior_admin'])) return;
   const tasks = await Task.find({status:'pending'});
