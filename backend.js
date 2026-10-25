@@ -1,7 +1,7 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
-const path = require('path');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 
@@ -981,22 +981,58 @@ async function startServer() {
     throw new Error('MONGODB_URI is required. Add your MongoDB Atlas connection string to the deployment environment.');
   }
 
-  await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
-  await migrateApprovedSubscriptions();
-  await ensureRoleAccount({
-    email: process.env.ADMIN_EMAIL,
-    password: process.env.ADMIN_PASSWORD,
-    name: process.env.ADMIN_NAME || 'Administrator',
-    role: 'admin',
-    label: 'Admin'
-  });
-  await ensureRoleAccount({
-    email: process.env.SENIOR_ADMIN_EMAIL,
-    password: process.env.SENIOR_ADMIN_PASSWORD,
-    name: process.env.SENIOR_ADMIN_NAME || 'Senior Administrator',
-    role: 'senior_admin',
-    label: 'Senior Admin'
-  });
+  const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+  const seniorAdminEmail = process.env.SENIOR_ADMIN_EMAIL?.trim().toLowerCase();
+  if (adminEmail && seniorAdminEmail && adminEmail === seniorAdminEmail) {
+    throw new Error('ADMIN_EMAIL and SENIOR_ADMIN_EMAIL must be different. Use separate email addresses for the admin and senior-admin accounts.');
+  }
+
+  let parsedMongoUri;
+  try {
+    parsedMongoUri = new URL(MONGODB_URI);
+  } catch {
+    throw new Error('MONGODB_URI is not a valid connection string. Copy a fresh URI from MongoDB Atlas > Connect > Drivers and put it in the project .env file.');
+  }
+  if (!['mongodb:', 'mongodb+srv:'].includes(parsedMongoUri.protocol) ||
+      !parsedMongoUri.hostname ||
+      !parsedMongoUri.username ||
+      !parsedMongoUri.password) {
+    throw new Error('MONGODB_URI is incomplete. Add a full Atlas driver URI with your database username, password, and active cluster host to the project .env file.');
+  }
+
+  try {
+    await mongoose.connect(MONGODB_URI, { dbName: 'taskearn', serverSelectionTimeoutMS: 10000 });
+  } catch (error) {
+    if (error.code === 8000 || /bad auth|authentication failed/i.test(error.message || '')) {
+      throw new Error(
+        'MongoDB authentication failed. Atlas rejected the database credentials in MONGODB_URI. Confirm the database username and password under Security > Database Access in the same Atlas project as this cluster, and replace the complete URI from Atlas > Connect > Drivers in the project .env file. Encode reserved password characters and restart the server.'
+      );
+    }
+    if (/querysrv|enotfound|ebadres/i.test(`${error.code || ''} ${error.message || ''}`)) {
+      throw new Error('MongoDB Atlas cluster hostname could not be resolved. The cluster may have been deleted or the URI may be stale. Create or select an active Atlas cluster, then replace MONGODB_URI with a fresh URI from Atlas > Connect > Drivers.');
+    }
+    throw error;
+  }
+  try {
+    await migrateApprovedSubscriptions();
+    await ensureRoleAccount({
+      email: process.env.ADMIN_EMAIL,
+      password: process.env.ADMIN_PASSWORD,
+      name: process.env.ADMIN_NAME || 'Administrator',
+      role: 'admin',
+      label: 'Admin'
+    });
+    await ensureRoleAccount({
+      email: process.env.SENIOR_ADMIN_EMAIL,
+      password: process.env.SENIOR_ADMIN_PASSWORD,
+      name: process.env.SENIOR_ADMIN_NAME || 'Senior Administrator',
+      role: 'senior_admin',
+      label: 'Senior Admin'
+    });
+  } catch (error) {
+    await mongoose.disconnect();
+    throw error;
+  }
   return app.listen(PORT, () => {
     console.log(`TaskEarn backend is running on port ${PORT}`);
   });

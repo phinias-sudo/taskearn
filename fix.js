@@ -1,0 +1,2 @@
+require('fs').writeFileSync('.env', 'MONGODB_URI=mongodb+srv://phinias:Phinias2024@cluster0.zj5f4if.mongodb.net/taskearn?retryWrites=true&w=majority\nJWT_SECRET=PhiniasSecret12345\nPORT=5000\nADMIN_EMAIL=phiniaskangwana1@gmail.com\nADMIN_PASSWORD=PhiniasAdmin123\nSENIOR_ADMIN_EMAIL=phiniaskangwana1@gmail.com\nSENIOR_ADMIN_PASSWORD=PhiniasSenior123\n')
+console.log('done')
