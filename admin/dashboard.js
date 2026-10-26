@@ -529,10 +529,10 @@
     currentRole = role;
     const isSeniorAdmin = role === 'senior_admin';
     document.querySelectorAll('.nav button').forEach((button) => {
-      button.hidden = !isSeniorAdmin && !['users', 'tasks', 'payments'].includes(button.dataset.page);
+      button.hidden = !isSeniorAdmin && !['overview', 'users', 'tasks', 'payments'].includes(button.dataset.page);
     });
     document.querySelectorAll('.page').forEach((page) => {
-      page.hidden = !isSeniorAdmin && !['users', 'tasks', 'payments'].includes(page.id);
+      page.hidden = !isSeniorAdmin && !['overview', 'users', 'tasks', 'payments'].includes(page.id);
     });
 
     const links = document.querySelector('.links');
@@ -547,7 +547,11 @@
       links.append(seniorLink);
     }
 
-    setPage(isSeniorAdmin ? (location.hash.slice(1) || 'overview') : 'users');
+    const requestedPage = location.hash.slice(1);
+    const adminPages = ['overview', 'users', 'tasks', 'payments'];
+    setPage(!isSeniorAdmin && requestedPage && !adminPages.includes(requestedPage)
+      ? 'overview'
+      : requestedPage || 'overview');
   }
 
   async function initialize() {
@@ -564,7 +568,7 @@
       if (user.role === 'senior_admin') {
         await Promise.all([loadSummary(), loadTasks(), loadWithdrawals()]);
       } else {
-        await loadTasks();
+        await Promise.all([loadSummary(), loadTasks()]);
       }
       await loadPayments();
       document.documentElement.classList.add('authorized');

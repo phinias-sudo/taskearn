@@ -208,11 +208,13 @@ async function requireUser(req, res) {
   return user;
 }
 
-async function requireRole(req, res, allowedRoles) {
+async function requireRole(req, res, allowedRoles, forbiddenMessage) {
   const user = await requireUser(req, res);
   if (!user) return null;
   if (!allowedRoles.includes(user.role)) {
-    res.status(403).json({ message: 'You do not have permission to access this resource.' });
+    res.status(403).json({
+      message: forbiddenMessage || 'Your account role does not allow this action.'
+    });
     return null;
   }
   return user;
@@ -579,12 +581,18 @@ app.post('/api/withdraw', async (req, res) => {
 });
 
 app.get('/api/admin/summary', async (req, res) => {
-  if (!await requireRole(req, res, ['senior_admin'])) return;
-  const [users, pendingWithdrawalRequests, publishedTasks] = await Promise.all([
-    User.find(),
-    WithdrawalRequest.countDocuments({ status: 'pending' }),
+  const admin = await requireRole(req, res, ['admin', 'senior_admin']);
+  if (!admin) return;
+  const userQuery = admin.role === 'senior_admin' ? {} : { role: 'member', deletedAt: null };
+  const [users, publishedTasks] = await Promise.all([
+    User.find(userQuery),
     PublishedTask.countDocuments()
   ]);
+  const memberIds = users.map((user) => user.id);
+  const pendingWithdrawalRequests = await WithdrawalRequest.countDocuments({
+    status: 'pending',
+    ...(admin.role === 'admin' ? { userId: { $in: memberIds } } : {})
+  });
   res.json({
     totalUsers: users.length,
     totalMembers: users.filter((user) => user.role === 'member').length,
@@ -673,7 +681,7 @@ app.post('/api/admin/users/:id/status', async (req, res) => {
     return res.status(400).json({ message: 'You cannot change your own administrator account status.' });
   }
   if (admin.role === 'admin' && user.role !== 'member') {
-    return res.status(403).json({ message: 'Regular admins can only manage member accounts.' });
+    return res.status(403).json({ message: 'Regular admins can only manage member accounts. Sign in as a senior admin for elevated account management.' });
   }
   user.status = status;
   await user.save();
@@ -819,7 +827,7 @@ app.post('/api/admin/users/:id/balance-adjustments', async (req, res) => {
 });
 
 app.get('/api/admin/withdrawals', async (req, res) => {
-  if (!await requireRole(req, res, ['senior_admin'])) return;
+  if (!await requireRole(req, res, ['senior_admin'], 'Withdrawal requests are restricted to senior admins.')) return;
   const withdrawals = await WithdrawalRequest.find().sort({ createdAt: -1 }).lean();
   const users = await User.find({ id: { $in: withdrawals.map((request) => request.userId) } });
   const usersById = new Map(users.map((user) => [user.id, user]));
@@ -837,7 +845,7 @@ app.get('/api/admin/withdrawals', async (req, res) => {
 });
 
 app.post('/api/admin/withdrawals/:id/review', async (req, res) => {
-  if (!await requireRole(req, res, ['senior_admin'])) return;
+  if (!await requireRole(req, res, ['senior_admin'], 'Only senior admins can review withdrawal requests.')) return;
   const status = req.body?.status;
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(400).json({ message: 'Choose approve or reject for this withdrawal.' });
@@ -968,7 +976,7 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-app.get(['/admin', '/admin.html', '/admin/index.html', '/dashboards/admin', '/dashboards/admin/index.html'], async (req, res) => {
+app.get(['/admin', '/admin.html', '/admin/index.html', '/admin/admin.html', '/dashboards/admin', '/dashboards/admin/index.html'], async (req, res) => {
   res.set('Cache-Control', 'private, no-store');
   res.sendFile(path.join(__dirname, 'admin', 'index.html'));
 });
