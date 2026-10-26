@@ -50,6 +50,39 @@
     document.querySelectorAll('.value').forEach((value) => value.classList.remove('loading'));
   }
 
+  function configureAdminCreation() {
+    const form = document.getElementById('createAdminForm');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = form.querySelector('button[type="submit"]');
+      const values = Object.fromEntries(new FormData(form));
+      button.disabled = true;
+      try {
+        const token = localStorage.getItem(tokenKey);
+        const response = await fetch('/api/senior/admins', {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify(values)
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.message || `Request failed (${response.status}).`);
+        form.reset();
+        notice.classList.remove('success');
+        showNotice(result.message);
+        notice.classList.add('success');
+      } catch (error) {
+        notice.classList.remove('success');
+        showNotice(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+
   async function initialize() {
     try {
       const { user } = await request('/api/me');
@@ -59,6 +92,7 @@
       }
 
       addNavigationLinks();
+      configureAdminCreation();
       const summary = await request('/api/admin/summary');
       renderSummary(summary);
       document.documentElement.classList.add('authorized');

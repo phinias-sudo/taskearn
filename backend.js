@@ -903,6 +903,33 @@ app.post('/api/admin/users', async (req, res) => {
   }
 });
 
+app.post('/api/senior/admins', async (req, res) => {
+  if (!await requireRole(req, res, ['senior_admin'])) return;
+
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  if (!name || !email || !password) {
+    return res.status(400).json({ message: 'Name, email, and an initial password are required.' });
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ message: 'Enter a valid email address.' });
+  }
+  if (password.length < 12) {
+    return res.status(400).json({ message: 'Admin passwords must be at least 12 characters.' });
+  }
+
+  try {
+    const admin = await User.create(createUser({ name, email, password, role: 'admin' }));
+    res.status(201).json({ message: 'Admin account created successfully.', user: sanitizeUser(admin) });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ message: 'An account with this email already exists.' });
+    }
+    throw error;
+  }
+});
+
 app.post('/api/admin/tasks', async (req, res) => {
   if (!await requireRole(req, res, ['admin', 'senior_admin'])) return;
 
