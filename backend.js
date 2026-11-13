@@ -9,6 +9,8 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI;
 const isProduction = process.env.NODE_ENV === 'production';
+let databaseReady = false;
+let databaseInitialization = null;
 
 if (isProduction) {
   app.set('trust proxy', 1);
@@ -259,6 +261,10 @@ async function ensureRoleAccount({ email: configuredEmail, password, name, role,
     if (existingUser.role !== role) {
       throw new Error(`${label.toUpperCase().replaceAll(' ', '_')}_EMAIL is already registered with another role; choose another email.`);
     }
+    if (!passwordMatches(password, existingUser.passwordHash)) {
+      existingUser.passwordHash = hashPassword(password);
+      await existingUser.save();
+    }
     return;
   }
 
@@ -281,7 +287,22 @@ async function migrateApprovedSubscriptions() {
 }
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, message: 'TaskEarn backend is running', timestamp: new Date().toISOString() });
+  const connected = databaseReady && mongoose.connection.readyState === 1;
+  res.status(connected ? 200 : 503).json({
+    ok: connected,
+    message: connected ? 'TaskEarn backend is running' : 'TaskEarn database is unavailable',
+    database: connected ? 'connected' : 'unavailable',
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.use('/api', (req, res, next) => {
+  if (!databaseReady || mongoose.connection.readyState !== 1) {
+    return res.status(503).json({
+      message: 'The TaskEarn page is available, but account services are temporarily unavailable while the database reconnects.'
+    });
+  }
+  next();
 });
 
 app.get('/health', (req, res) => {
@@ -1011,7 +1032,7 @@ app.use((error, req, res, next) => {
   });
 });
 
-async function startServer() {
+function validateDatabaseConfiguration() {
   if (!MONGODB_URI) {
     throw new Error('MONGODB_URI is required. Add your MongoDB Atlas connection string to the deployment environment.');
   }
@@ -1034,7 +1055,10 @@ async function startServer() {
       !parsedMongoUri.password) {
     throw new Error('MONGODB_URI is incomplete. Add a full Atlas driver URI with your database username, password, and active cluster host to the project .env file.');
   }
+}
 
+async function connectDatabase() {
+  validateDatabaseConfiguration();
   try {
     await mongoose.connect(MONGODB_URI, { dbName: 'taskearn', serverSelectionTimeoutMS: 10000 });
   } catch (error) {
@@ -1068,9 +1092,47 @@ async function startServer() {
     await mongoose.disconnect();
     throw error;
   }
-  return app.listen(PORT, () => {
+  databaseReady = true;
+  console.log('TaskEarn database connection is ready');
+}
+
+async function initializeDatabase() {
+  if (databaseInitialization) return databaseInitialization;
+
+  databaseInitialization = (async () => {
+    while (!databaseReady) {
+      try {
+        await connectDatabase();
+      } catch (error) {
+        console.error('Database initialization failed:', error.message);
+        await new Promise((resolve) => setTimeout(resolve, 30000));
+      }
+    }
+  })();
+
+  try {
+    await databaseInitialization;
+  } finally {
+    databaseInitialization = null;
+    if (!databaseReady) void initializeDatabase();
+  }
+}
+
+mongoose.connection.on('disconnected', () => {
+  const wasReady = databaseReady;
+  databaseReady = false;
+  if (wasReady) {
+    console.error('TaskEarn database disconnected; reconnecting...');
+    void initializeDatabase();
+  }
+});
+
+async function startServer() {
+  const server = app.listen(PORT, () => {
     console.log(`TaskEarn backend is running on port ${PORT}`);
   });
+  void initializeDatabase();
+  return server;
 }
 
 if (require.main === module) {
