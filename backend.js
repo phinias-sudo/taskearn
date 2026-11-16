@@ -1128,7 +1128,8 @@ mongoose.connection.on('disconnected', () => {
 });
 
 async function startServer() {
-  const server = app.listen(PORT, () => {
+  const host = isProduction ? '0.0.0.0' : '127.0.0.1';
+  const server = app.listen(PORT, host, () => {
     console.log(`TaskEarn backend is running on port ${PORT}`);
   });
   void initializeDatabase();
