@@ -7,6 +7,8 @@ const mongoose = require('mongoose');
 const {
   levels: subscriptionLevels,
   getSubscriptionLevel,
+  getWithdrawalSchedule,
+  isWithdrawalWindowOpen,
   calculateReferralCommission
 } = require('./subscription-levels');
 
@@ -325,7 +327,20 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/api/subscription/levels', (req, res) => {
-  res.json({ levels: subscriptionLevels });
+  res.json({
+    levels: subscriptionLevels.map((level) => ({
+      ...level,
+      weekdayReferralCommission: {
+        rate: 0.1,
+        amount: Math.round(level.amount * 0.1)
+      },
+      weekendReferralCommission: {
+        rate: 0.2,
+        amount: Math.round(level.amount * 0.2)
+      },
+      withdrawalSchedule: getWithdrawalSchedule(level.plan)
+    }))
+  });
 });
 
 app.post('/api/register', async (req, res) => {
@@ -439,6 +454,7 @@ app.get('/api/dashboard', async (req, res) => {
   res.json({
     user: sanitizeUser(user),
     subscriptionActive,
+    withdrawalSchedule: getWithdrawalSchedule(user.plan),
     stats: {
       balance: user.availableBalance,
       totalEarnings: user.totalEarnings,
@@ -615,17 +631,24 @@ app.post('/api/withdraw', async (req, res) => {
   if (!['M-Pesa', 'Bank Transfer'].includes(method)) {
     return res.status(400).json({ message: 'Choose a valid withdrawal method.' });
   }
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Africa/Nairobi',
-    weekday: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23'
-  }).formatToParts(new Date());
-  const localTime = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  const localMinutes = Number(localTime.hour) * 60 + Number(localTime.minute);
-  if (localTime.weekday !== 'Fri' || localMinutes < 420 || localMinutes > 840) {
-    return res.status(400).json({ message: 'Withdrawals are available only on Friday from 7:00 AM to 2:00 PM East Africa Time.' });
+  const withdrawalSchedule = getWithdrawalSchedule(user.plan);
+  if (!withdrawalSchedule) {
+    return res.status(409).json({ message: 'Your account does not have a valid withdrawal schedule. Contact support.' });
+  }
+  if (!isWithdrawalWindowOpen(user.plan)) {
+    const formatTime = (time) => {
+      const [hour, minute] = time.split(':').map(Number);
+      const period = hour >= 12 ? 'PM' : 'AM';
+      const displayHour = hour % 12 || 12;
+      return `${displayHour}:${String(minute).padStart(2, '0')} ${period}`;
+    };
+    const dayNames = { Tue: 'Tuesday', Fri: 'Friday', Sun: 'Sunday' };
+    const scheduleText = withdrawalSchedule.map((slot) => (
+      `${slot.days.map((day) => dayNames[day]).join(' and ')} ${formatTime(slot.start)}-${formatTime(slot.end)}`
+    )).join('; ');
+    return res.status(400).json({
+      message: `Withdrawals for your ${user.plan} plan are available ${scheduleText} East Africa Time.`
+    });
   }
   if (amount > user.availableBalance) {
     return res.status(400).json({ message: 'Withdrawal amount cannot exceed available balance.' });

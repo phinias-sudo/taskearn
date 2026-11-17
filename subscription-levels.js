@@ -35,9 +35,49 @@ const levels = Object.freeze([
   amount
 })));
 
+const withdrawalSchedules = Object.freeze({
+  Basic: Object.freeze([
+    Object.freeze({ days: Object.freeze(['Fri']), start: '06:00', end: '14:00' })
+  ]),
+  VIP: Object.freeze([
+    Object.freeze({ days: Object.freeze(['Tue', 'Sun']), start: '14:00', end: '19:00' })
+  ]),
+  Premium: Object.freeze([
+    Object.freeze({ days: Object.freeze(['Tue', 'Sun']), start: '14:00', end: '19:00' }),
+    Object.freeze({ days: Object.freeze(['Fri']), start: '06:00', end: '14:00' })
+  ])
+});
+
 function getSubscriptionLevel(level) {
   if (!Number.isInteger(level) || level < 1 || level > levels.length) return null;
   return levels[level - 1];
+}
+
+function getWithdrawalSchedule(plan) {
+  return withdrawalSchedules[plan] || null;
+}
+
+function isWithdrawalWindowOpen(plan, dateValue = new Date()) {
+  const schedule = getWithdrawalSchedule(plan);
+  if (!schedule) return false;
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) {
+    throw new TypeError('A valid date is required to check the withdrawal schedule.');
+  }
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Africa/Nairobi',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(date);
+  const localTime = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const minutes = Number(localTime.hour) * 60 + Number(localTime.minute);
+  return schedule.some((slot) => {
+    const start = Number(slot.start.slice(0, 2)) * 60 + Number(slot.start.slice(3));
+    const end = Number(slot.end.slice(0, 2)) * 60 + Number(slot.end.slice(3));
+    return slot.days.includes(localTime.weekday) && minutes >= start && minutes < end;
+  });
 }
 
 function isWeekend(dateValue) {
@@ -66,5 +106,7 @@ function calculateReferralCommission(subscriptionAmount, registeredAt, approvedA
 module.exports = {
   levels,
   getSubscriptionLevel,
+  getWithdrawalSchedule,
+  isWithdrawalWindowOpen,
   calculateReferralCommission
 };

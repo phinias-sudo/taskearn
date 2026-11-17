@@ -6,6 +6,7 @@
   let busy = false;
   let selectedPaymentProof = '';
   let referralSummaryRequest = 0;
+  let currentWithdrawalSchedule = null;
 
   async function apiRequest(url, options = {}) {
     const headers = new Headers(options.headers || {});
@@ -104,6 +105,7 @@
   }
 
   function isWithdrawalWindowOpen() {
+    if (!currentWithdrawalSchedule || !currentUser) return true;
     const parts = new Intl.DateTimeFormat('en-US', {
       timeZone: 'Africa/Nairobi',
       weekday: 'short',
@@ -113,7 +115,24 @@
     }).formatToParts(new Date());
     const localTime = Object.fromEntries(parts.map((part) => [part.type, part.value]));
     const minutes = Number(localTime.hour) * 60 + Number(localTime.minute);
-    return localTime.weekday === 'Fri' && minutes >= 420 && minutes <= 840;
+    return currentWithdrawalSchedule.some((slot) => {
+      const start = Number(slot.start.slice(0, 2)) * 60 + Number(slot.start.slice(3));
+      const end = Number(slot.end.slice(0, 2)) * 60 + Number(slot.end.slice(3));
+      return slot.days.includes(localTime.weekday) && minutes >= start && minutes < end;
+    });
+  }
+
+  function formatWithdrawalSchedule(schedule) {
+    if (!Array.isArray(schedule) || !schedule.length) return 'No withdrawal schedule is available.';
+    const dayNames = { Tue: 'Tuesday', Fri: 'Friday', Sun: 'Sunday' };
+    const formatTime = (time) => {
+      const [hour, minute] = time.split(':').map(Number);
+      const period = hour >= 12 ? 'PM' : 'AM';
+      return `${hour % 12 || 12}:${String(minute).padStart(2, '0')} ${period}`;
+    };
+    return `${schedule.map((slot) => (
+      `${slot.days.map((day) => dayNames[day]).join(' and ')} ${formatTime(slot.start)}-${formatTime(slot.end)}`
+    )).join('; ')} East Africa Time.`;
   }
 
   function setVisibleState(isLoggedIn) {
@@ -225,29 +244,86 @@
     updateSubscriptionPaymentAvailability();
   }
 
+  function setupLevelBenefits() {
+    if (currentUser?.role !== 'member') return;
+    const nav = document.querySelector('.sidebar .nav');
+    const content = document.querySelector('#app .content');
+    if (!nav || !content || document.getElementById('level-benefits')) return;
+
+    const navItem = document.createElement('div');
+    navItem.className = 'nav-item level-benefits-nav-link';
+    navItem.textContent = 'Level Benefits';
+    navItem.addEventListener('click', () => window.showPage('level-benefits', navItem));
+    nav.append(navItem);
+
+    const page = document.createElement('section');
+    page.className = 'page';
+    page.id = 'level-benefits';
+    page.innerHTML = '<div class="page-title"><h1>Level Benefits</h1><p>Compare subscription fees, referral commissions, and withdrawal times for every level.</p></div><div class="card"><p class="muted">Referral commission is credited after subscription approval: the standard rate is 10%; it is 20% only when both registration and approval occur on a weekend. All withdrawal hours use East Africa Time.</p><div class="level-table-wrap"><table class="level-table"><thead><tr><th>Level</th><th>Plan</th><th>Subscription amount</th><th>Referral commission</th><th>Withdrawal schedule</th></tr></thead><tbody id="levelBenefitsRows"><tr><td colspan="5">Loading levels…</td></tr></tbody></table></div></div>';
+    content.append(page);
+  }
+
   async function loadSubscriptionLevels() {
     try {
       const { levels } = await apiRequest('/api/subscription/levels');
       const select = document.getElementById('subscriptionLevel');
       const details = document.getElementById('subscriptionLevelDetails');
-      if (!select) return;
+      const tableBody = document.getElementById('levelBenefitsRows');
+      if (!select && !tableBody) return;
 
-      select.replaceChildren(new Option('Choose a subscription level', ''));
+      if (select) {
+        select.replaceChildren(new Option('Choose a subscription level', ''));
+      }
+      if (tableBody) tableBody.replaceChildren();
+
       levels.forEach((level) => {
-        const option = new Option(
-          `Level ${level.level} (${level.plan}) - ${currency(level.amount)}`,
-          String(level.level)
-        );
-        select.append(option);
-      });
-      select.addEventListener('change', () => {
-        const level = levels.find((item) => item.level === Number(select.value));
-        if (details) {
-          details.textContent = level
-            ? `Level ${level.level} (${level.plan}) costs ${currency(level.amount)}.`
-            : 'The selected level determines your subscription fee.';
+        if (select) {
+          const option = new Option(
+            `Level ${level.level} (${level.plan}) - ${currency(level.amount)}`,
+            String(level.level)
+          );
+          select.append(option);
         }
+        if (!tableBody) return;
+
+        const row = document.createElement('tr');
+        const referral = `${level.weekdayReferralCommission.rate * 100}% standard (${currency(level.weekdayReferralCommission.amount)}); ${level.weekendReferralCommission.rate * 100}% if registration and approval are both on a weekend (${currency(level.weekendReferralCommission.amount)})`;
+        [
+          `Level ${level.level}`,
+          level.plan,
+          currency(level.amount),
+          referral,
+          formatWithdrawalSchedule(level.withdrawalSchedule)
+        ].forEach((value, index) => {
+          const cell = document.createElement('td');
+          cell.textContent = value;
+          if (index === 0) cell.className = 'level-number';
+          if (index === 2) cell.className = 'price';
+          if (index === 3) cell.className = 'benefit';
+          row.append(cell);
+        });
+        tableBody.append(row);
       });
+      if (select) {
+        select.addEventListener('change', () => {
+          const level = levels.find((item) => item.level === Number(select.value));
+          if (details) {
+            details.textContent = level
+              ? `Level ${level.level} (${level.plan}) costs ${currency(level.amount)}.`
+              : 'The selected level determines your subscription fee.';
+          }
+        });
+      }
+      if (!levels.length) {
+        if (tableBody) {
+          const row = document.createElement('tr');
+          const cell = document.createElement('td');
+          cell.colSpan = 5;
+          cell.textContent = 'No subscription levels are available.';
+          row.append(cell);
+          tableBody.append(row);
+        }
+      }
     } catch (error) {
       showSubscriptionPaymentMessage(`Subscription levels could not be loaded: ${error.message}`, 'danger');
     }
@@ -568,14 +644,17 @@
   function updateDashboard(data) {
     currentUser = data.user;
     apiTasks = data.tasks;
+    currentWithdrawalSchedule = data.withdrawalSchedule;
     removeUnavailableFeatures();
     updateDashboardLinks(data.user.role);
     setupSubscriptionPayments();
+    setupLevelBenefits();
     setupReferralDashboard();
     window.balance = data.stats.balance;
     window.updateBalance();
     window.updateLevelChallenge();
     updateAccountHeader(data.user);
+    updateWithdrawalSchedule(data.user, data.withdrawalSchedule);
 
     const balance = document.getElementById('balance');
     const totalEarnings = document.getElementById('totalEarnings');
@@ -643,6 +722,16 @@
     });
 
     renderTransactions(data.user.transactions);
+  }
+
+  function updateWithdrawalSchedule(user, schedule) {
+    const scheduleText = formatWithdrawalSchedule(schedule);
+    const walletNotice = document.getElementById('walletWithdrawalSchedule');
+    const modalNotice = document.getElementById('withdrawScheduleNotice');
+    if (walletNotice) walletNotice.textContent = scheduleText;
+    if (modalNotice) {
+      modalNotice.textContent = `Withdrawal amount: KES 500. ${user.plan || 'Basic'} withdrawals: ${scheduleText}`;
+    }
   }
 
   async function loadDashboard() {
@@ -807,7 +896,7 @@
     if (!account) return alert('Please enter your account or phone number.');
     if (amount !== 500) return alert('The only available withdrawal amount is KES 500.');
     if (!isWithdrawalWindowOpen()) {
-      return alert('Withdrawals are available only on Friday from 7:00 AM to 2:00 PM East Africa Time.');
+      return alert(`Withdrawals for your ${currentUser?.plan || 'Basic'} plan are available ${formatWithdrawalSchedule(currentWithdrawalSchedule)}`);
     }
     if (amount > window.balance) return alert('Insufficient balance.');
 
@@ -845,10 +934,13 @@
       localStorage.removeItem(tokenKey);
       currentUser = null;
       apiTasks = [];
+      currentWithdrawalSchedule = null;
       referralSummaryRequest += 1;
       window.showPage('dashboard', document.querySelector('.sidebar .nav-item[onclick*="dashboard"]'));
       document.getElementById('referrals')?.remove();
       document.querySelector('.referral-nav-link')?.remove();
+      document.getElementById('level-benefits')?.remove();
+      document.querySelector('.level-benefits-nav-link')?.remove();
       updateDashboardLinks('member');
       setVisibleState(false);
     }

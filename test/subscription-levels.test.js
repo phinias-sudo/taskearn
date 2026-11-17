@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const {
   levels,
   getSubscriptionLevel,
+  getWithdrawalSchedule,
+  isWithdrawalWindowOpen,
   calculateReferralCommission
 } = require('../subscription-levels');
 
@@ -28,6 +30,31 @@ test('subscription levels use the configured tier and fee schedule', () => {
   assert.equal(getSubscriptionLevel(0), null);
   assert.equal(getSubscriptionLevel(31), null);
   assert.equal(getSubscriptionLevel('1'), null);
+});
+
+test('withdrawal schedules follow the plan days and East Africa Time windows', () => {
+  assert.deepEqual(getWithdrawalSchedule('Basic'), [
+    { days: ['Fri'], start: '06:00', end: '14:00' }
+  ]);
+  assert.deepEqual(getWithdrawalSchedule('VIP'), [
+    { days: ['Tue', 'Sun'], start: '14:00', end: '19:00' }
+  ]);
+  assert.deepEqual(getWithdrawalSchedule('Premium'), [
+    { days: ['Tue', 'Sun'], start: '14:00', end: '19:00' },
+    { days: ['Fri'], start: '06:00', end: '14:00' }
+  ]);
+  assert.equal(getWithdrawalSchedule('Unknown'), null);
+
+  assert.equal(isWithdrawalWindowOpen('Basic', '2024-06-07T02:59:00Z'), false);
+  assert.equal(isWithdrawalWindowOpen('Basic', '2024-06-07T03:00:00Z'), true);
+  assert.equal(isWithdrawalWindowOpen('Basic', '2024-06-07T10:59:00Z'), true);
+  assert.equal(isWithdrawalWindowOpen('Basic', '2024-06-07T11:00:00Z'), false);
+  assert.equal(isWithdrawalWindowOpen('Basic', '2024-06-04T11:00:00Z'), false);
+  assert.equal(isWithdrawalWindowOpen('VIP', '2024-06-04T11:00:00Z'), true);
+  assert.equal(isWithdrawalWindowOpen('VIP', '2024-06-04T16:00:00Z'), false);
+  assert.equal(isWithdrawalWindowOpen('VIP', '2024-06-07T03:00:00Z'), false);
+  assert.equal(isWithdrawalWindowOpen('Premium', '2024-06-09T11:00:00Z'), true);
+  assert.equal(isWithdrawalWindowOpen('Premium', '2024-06-07T03:00:00Z'), true);
 });
 
 test('weekend commission is 20% only when signup and approval are both on weekends in Nairobi time', () => {
