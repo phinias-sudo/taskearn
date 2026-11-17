@@ -130,7 +130,9 @@
   function renderPayment(payment) {
     const row = document.createElement('tr');
     cell(row, `${payment.memberName} (${payment.memberEmail})`);
-    cell(row, payment.requestedPlan);
+    cell(row, Number.isInteger(payment.requestedLevel)
+      ? `Level ${payment.requestedLevel} (${payment.requestedPlan}) - KES ${Number(payment.amount).toLocaleString()}`
+      : `${payment.requestedPlan} (legacy payment; amount not recorded)`);
     cell(row, payment.paymentReference);
     const proofCell = cell(row, '');
     const proofLink = document.createElement('a');

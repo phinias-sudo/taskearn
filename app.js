@@ -5,6 +5,7 @@
   let currentUser = null;
   let busy = false;
   let selectedPaymentProof = '';
+  let referralSummaryRequest = 0;
 
   async function apiRequest(url, options = {}) {
     const headers = new Headers(options.headers || {});
@@ -164,13 +165,12 @@
   };
 
   function removeUnavailableFeatures() {
-    ['referrals', 'subscription', 'support'].forEach((pageId) => {
+    ['subscription', 'support'].forEach((pageId) => {
       document.getElementById(pageId)?.remove();
       document.querySelectorAll('.sidebar .nav-item').forEach((item) => {
         if (item.getAttribute('onclick')?.includes(`'${pageId}'`)) item.remove();
       });
     });
-    document.querySelector('.referral-box')?.remove();
     document.querySelector('.notification')?.remove();
     document.querySelector('.login-box button[onclick="signInWithGoogle()"]')?.remove();
     document.getElementById('loginClaimModal')?.remove();
@@ -180,7 +180,7 @@
     });
     document.getElementById('depositModal')?.remove();
     document.querySelectorAll('#transactions select option').forEach((option) => {
-      if (['Referral Commission', 'Deposits'].includes(option.textContent)) option.remove();
+      if (option.textContent === 'Deposits') option.remove();
     });
   }
 
@@ -199,8 +199,9 @@
     const page = document.createElement('section');
     page.className = 'page';
     page.id = 'subscription-payments';
-    page.innerHTML = '<div class="page-title"><h1>Subscription payments</h1><p>Pay for your chosen plan, then upload the payment reference and receipt. Daily tasks unlock after an admin verifies your payment. Approval activates your plan and does not add money to your wallet.</p></div><div id="subscriptionPaymentMessage" aria-live="polite"></div><div class="card"><div class="form-group"><label for="subscriptionPlan">Requested plan</label><select id="subscriptionPlan"><option value="Basic">Basic</option><option value="Premium">Premium</option><option value="VIP">VIP</option></select></div><div class="form-group"><label for="paymentReference">Payment reference</label><input id="paymentReference" maxlength="100" placeholder="Enter the transaction reference"></div><div class="form-group"><label for="paymentProof">Payment receipt image (JPEG, PNG, or WebP; max 1 MB)</label><input id="paymentProof" type="file" accept="image/jpeg,image/png,image/webp"></div><button class="btn btn-primary" type="button" id="submitSubscriptionPayment">Submit for review</button> <button class="btn btn-light" type="button" id="refreshSubscriptionAccess">Refresh subscription status</button></div><div class="card"><h3>My payment submissions</h3><div class="table-wrapper"><table><thead><tr><th>Plan</th><th>Submitted</th><th>Status</th></tr></thead><tbody id="subscriptionPaymentRows"><tr><td colspan="3">No payment submissions yet.</td></tr></tbody></table></div></div>';
+    page.innerHTML = '<div class="page-title"><h1>Subscription payments</h1><p>Select one of the 30 levels and pay the listed amount. Your subscription and any referral commission activate only after an admin verifies your payment.</p></div><div id="subscriptionPaymentMessage" aria-live="polite"></div><div class="card"><div class="form-group"><label for="subscriptionLevel">Subscription level</label><select id="subscriptionLevel" required><option value="">Loading levels…</option></select><p class="muted" id="subscriptionLevelDetails">The selected level determines your subscription fee.</p></div><div class="form-group"><label for="paymentReference">Payment reference</label><input id="paymentReference" maxlength="100" placeholder="Enter the transaction reference"></div><div class="form-group"><label for="paymentProof">Payment receipt image (JPEG, PNG, or WebP; max 1 MB)</label><input id="paymentProof" type="file" accept="image/jpeg,image/png,image/webp"></div><button class="btn btn-primary" type="button" id="submitSubscriptionPayment">Submit for review</button> <button class="btn btn-light" type="button" id="refreshSubscriptionAccess">Refresh subscription status</button></div><div class="card"><h3>My payment submissions</h3><div class="table-wrapper"><table><thead><tr><th>Level and amount</th><th>Submitted</th><th>Status</th></tr></thead><tbody id="subscriptionPaymentRows"><tr><td colspan="3">No payment submissions yet.</td></tr></tbody></table></div></div>';
     content.append(page);
+    void loadSubscriptionLevels();
     document.getElementById('paymentProof').addEventListener('change', (event) => {
       selectedPaymentProof = '';
       const file = event.target.files[0];
@@ -222,6 +223,98 @@
     document.getElementById('submitSubscriptionPayment').addEventListener('click', submitSubscriptionPayment);
     document.getElementById('refreshSubscriptionAccess').addEventListener('click', refreshSubscriptionAccess);
     updateSubscriptionPaymentAvailability();
+  }
+
+  async function loadSubscriptionLevels() {
+    try {
+      const { levels } = await apiRequest('/api/subscription/levels');
+      const select = document.getElementById('subscriptionLevel');
+      const details = document.getElementById('subscriptionLevelDetails');
+      if (!select) return;
+
+      select.replaceChildren(new Option('Choose a subscription level', ''));
+      levels.forEach((level) => {
+        const option = new Option(
+          `Level ${level.level} (${level.plan}) - ${currency(level.amount)}`,
+          String(level.level)
+        );
+        select.append(option);
+      });
+      select.addEventListener('change', () => {
+        const level = levels.find((item) => item.level === Number(select.value));
+        if (details) {
+          details.textContent = level
+            ? `Level ${level.level} (${level.plan}) costs ${currency(level.amount)}.`
+            : 'The selected level determines your subscription fee.';
+        }
+      });
+    } catch (error) {
+      showSubscriptionPaymentMessage(`Subscription levels could not be loaded: ${error.message}`, 'danger');
+    }
+  }
+
+  function setupReferralDashboard() {
+    if (currentUser?.role !== 'member') return;
+    const nav = document.querySelector('.sidebar .nav');
+    const content = document.querySelector('#app .content');
+    if (!nav || !content) return;
+    if (document.getElementById('referrals')) {
+      void loadReferralSummary();
+      return;
+    }
+
+    const navItem = document.createElement('div');
+    navItem.className = 'nav-item';
+    navItem.classList.add('referral-nav-link');
+    navItem.textContent = 'Referrals';
+    navItem.addEventListener('click', () => window.showPage('referrals', navItem));
+    nav.append(navItem);
+
+    const page = document.createElement('section');
+    page.className = 'page';
+    page.id = 'referrals';
+    page.innerHTML = '<div class="page-title"><h1>Referrals</h1><p>Share your unique link and earn a wallet commission after your referral’s subscription is approved.</p></div><div class="stats"><div class="card"><h3>People referred</h3><div class="amount" id="referralTotal">0</div></div><div class="card"><h3>Activated</h3><div class="amount" id="referralActivated">0</div></div><div class="card"><h3>Awaiting activation</h3><div class="amount" id="referralAwaiting">0</div></div><div class="card"><h3>Total referral earnings</h3><div class="amount" id="referralEarnings">KES 0</div></div></div><div class="card"><h3>Your referral link</h3><p class="muted">New members who register using this link will be attributed to your account.</p><div class="form-group"><label for="referralLink">Unique link</label><input id="referralLink" type="url" readonly></div><button class="btn btn-primary" type="button" id="copyReferralLink">Copy link</button> <button class="btn btn-light" type="button" id="refreshReferralSummary">Refresh</button><p id="referralMessage" aria-live="polite"></p></div><div class="card"><h3>Commission rules</h3><p>10% is paid for weekday referrals. 20% applies only when the member registers and their subscription is approved on Saturday or Sunday (Africa/Nairobi time). Commission is credited to your wallet after admin approval.</p><p class="muted">A referred member is counted as activated after their subscription is approved.</p></div>';
+    content.append(page);
+    document.getElementById('copyReferralLink').addEventListener('click', copyReferralLink);
+    document.getElementById('refreshReferralSummary').addEventListener('click', loadReferralSummary);
+    void loadReferralSummary();
+  }
+
+  async function loadReferralSummary() {
+    const requestId = ++referralSummaryRequest;
+    const message = document.getElementById('referralMessage');
+    const refreshButton = document.getElementById('refreshReferralSummary');
+    if (refreshButton) refreshButton.disabled = true;
+    try {
+      const summary = await apiRequest('/api/referrals');
+      if (requestId !== referralSummaryRequest || !document.getElementById('referrals')) return;
+      const referralUrl = new URL('/', location.origin);
+      referralUrl.searchParams.set('ref', summary.referralCode);
+      document.getElementById('referralLink').value = referralUrl.toString();
+      document.getElementById('referralTotal').textContent = String(summary.total);
+      document.getElementById('referralActivated').textContent = String(summary.activated);
+      document.getElementById('referralAwaiting').textContent = String(summary.awaitingActivation);
+      document.getElementById('referralEarnings').textContent = currency(summary.referralEarnings);
+      if (message) message.textContent = '';
+    } catch (error) {
+      if (message) message.textContent = `Referral details could not be loaded: ${error.message}`;
+    } finally {
+      if (refreshButton) refreshButton.disabled = false;
+    }
+  }
+
+  async function copyReferralLink() {
+    const input = document.getElementById('referralLink');
+    const message = document.getElementById('referralMessage');
+    if (!input || !input.value) return;
+    try {
+      await navigator.clipboard.writeText(input.value);
+      if (message) message.textContent = 'Referral link copied.';
+    } catch (error) {
+      input.focus();
+      input.select();
+      if (message) message.textContent = 'Clipboard access is unavailable. The link is selected so you can copy it manually.';
+    }
   }
 
   function updateSubscriptionPaymentAvailability() {
@@ -264,7 +357,13 @@
     }
     payments.forEach((payment) => {
       const row = document.createElement('tr');
-      [payment.requestedPlan, new Date(payment.createdAt).toLocaleString(), payment.status].forEach((value) => {
+      [
+        Number.isInteger(payment.requestedLevel)
+          ? `Level ${payment.requestedLevel} (${payment.requestedPlan}) - ${currency(payment.amount)}`
+          : payment.requestedPlan,
+        new Date(payment.createdAt).toLocaleString(),
+        payment.status
+      ].forEach((value) => {
         const cell = document.createElement('td');
         cell.textContent = value;
         row.append(cell);
@@ -308,9 +407,13 @@
   }
 
   async function submitSubscriptionPayment() {
-    const requestedPlan = document.getElementById('subscriptionPlan').value;
+    const requestedLevel = Number(document.getElementById('subscriptionLevel').value);
     const paymentReference = document.getElementById('paymentReference').value.trim();
     const file = document.getElementById('paymentProof').files[0];
+    if (!Number.isInteger(requestedLevel) || requestedLevel < 1 || requestedLevel > 30) {
+      showSubscriptionPaymentMessage('Choose a subscription level.', 'danger');
+      return;
+    }
     if (!paymentReference || !file || !selectedPaymentProof) {
       showSubscriptionPaymentMessage('Enter the payment reference and select a valid receipt image.', 'danger');
       return;
@@ -320,7 +423,7 @@
     try {
       const result = await apiRequest('/api/subscription/payments', {
         method: 'POST',
-        body: JSON.stringify({ requestedPlan, paymentReference, proof: selectedPaymentProof })
+        body: JSON.stringify({ requestedLevel, paymentReference, proof: selectedPaymentProof })
       });
       document.getElementById('paymentReference').value = '';
       document.getElementById('paymentProof').value = '';
@@ -468,6 +571,7 @@
     removeUnavailableFeatures();
     updateDashboardLinks(data.user.role);
     setupSubscriptionPayments();
+    setupReferralDashboard();
     window.balance = data.stats.balance;
     window.updateBalance();
     window.updateLevelChallenge();
@@ -625,7 +729,12 @@
     try {
       const result = await apiRequest('/api/register', {
         method: 'POST',
-        body: JSON.stringify({ name, email, password })
+        body: JSON.stringify({
+          name,
+          email,
+          password,
+          referralCode: new URLSearchParams(location.search).get('ref') || ''
+        })
       });
       localStorage.setItem(tokenKey, result.token);
       try {
@@ -736,6 +845,10 @@
       localStorage.removeItem(tokenKey);
       currentUser = null;
       apiTasks = [];
+      referralSummaryRequest += 1;
+      window.showPage('dashboard', document.querySelector('.sidebar .nav-item[onclick*="dashboard"]'));
+      document.getElementById('referrals')?.remove();
+      document.querySelector('.referral-nav-link')?.remove();
       updateDashboardLinks('member');
       setVisibleState(false);
     }

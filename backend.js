@@ -4,6 +4,11 @@ const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
+const {
+  levels: subscriptionLevels,
+  getSubscriptionLevel,
+  calculateReferralCommission
+} = require('./subscription-levels');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -37,6 +42,7 @@ const userSchema = new mongoose.Schema({
   deletedAt: { type: String, default: null },
   deletedBy: { type: String, default: '' },
   plan: { type: String, default: 'Basic' },
+  level: { type: Number, default: null },
   subscriptionActive: { type: Boolean, default: false },
   createdAt: { type: String, required: true },
   memberType: { type: String, required: true },
@@ -54,6 +60,7 @@ const userSchema = new mongoose.Schema({
     pendingWithdrawals: { type: Number, default: 0 }
   },
   referrals: { type: Number, default: 0 },
+  referredBy: { type: String, default: null, index: true },
   transactions: { type: [mongoose.Schema.Types.Mixed], default: [] }
 }, { versionKey: false });
 
@@ -84,6 +91,10 @@ const subscriptionPaymentSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
   userId: { type: String, required: true, index: true },
   requestedPlan: { type: String, enum: ['Basic', 'Premium', 'VIP'], required: true },
+  requestedLevel: { type: Number, default: null },
+  amount: { type: Number, default: null },
+  referralCommissionAmount: { type: Number, default: 0 },
+  referralCommissionRate: { type: Number, default: 0 },
   paymentReference: { type: String, required: true },
   proofData: { type: String, required: true },
   proofMimeType: { type: String, enum: ['image/jpeg', 'image/png', 'image/webp'], required: true },
@@ -125,6 +136,8 @@ function createUser({
   password,
   role = 'member',
   plan = 'Basic',
+  level = null,
+  referredBy = null,
   startingBalance = 0,
   totalEarnings = 0,
   referralEarnings = 0,
@@ -139,6 +152,8 @@ function createUser({
     passwordHash: hashPassword(password),
     role,
     plan,
+    level,
+    referredBy,
     createdAt: new Date().toISOString(),
     memberType: role === 'senior_admin' ? 'Senior Admin' : role === 'admin' ? 'Admin' : 'Member',
     availableBalance: startingBalance,
@@ -309,10 +324,17 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.get('/api/subscription/levels', (req, res) => {
+  res.json({ levels: subscriptionLevels });
+});
+
 app.post('/api/register', async (req, res) => {
   const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  const referralCode = typeof req.body?.referralCode === 'string'
+    ? req.body.referralCode.trim()
+    : '';
 
   if (!name || !email || !password) {
     return res.status(400).json({ message: 'Name, email, and password are required.' });
@@ -324,7 +346,23 @@ app.post('/api/register', async (req, res) => {
     return res.status(400).json({ message: 'Password must be at least 6 characters.' });
   }
 
+  let referrer = null;
+  if (referralCode) {
+    if (referralCode.length > 100) {
+      return res.status(400).json({ message: 'The referral link is invalid.' });
+    }
+    referrer = await User.findOne({
+      id: referralCode,
+      role: 'member',
+      deletedAt: null
+    }).select('id email');
+    if (!referrer || referrer.email === email) {
+      return res.status(400).json({ message: 'The referral link is invalid.' });
+    }
+  }
+
   const newUser = createUser({ name, email, password });
+  newUser.referredBy = referrer?.id || null;
   let user;
   try {
     user = await User.create(newUser);
@@ -485,15 +523,16 @@ app.post('/api/subscription/payments', async (req, res) => {
     return res.status(409).json({ message: 'Your subscription is already active.' });
   }
 
-  const requestedPlan = req.body?.requestedPlan;
+  const requestedLevel = Number(req.body?.requestedLevel);
+  const level = getSubscriptionLevel(requestedLevel);
   const paymentReference = typeof req.body?.paymentReference === 'string'
     ? req.body.paymentReference.trim()
     : '';
   const proof = typeof req.body?.proof === 'string' ? req.body.proof : '';
   const proofMatch = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/.exec(proof);
 
-  if (!['Basic', 'Premium', 'VIP'].includes(requestedPlan)) {
-    return res.status(400).json({ message: 'Choose a valid subscription plan.' });
+  if (!level) {
+    return res.status(400).json({ message: 'Choose a valid subscription level.' });
   }
   if (!paymentReference || paymentReference.length > 100) {
     return res.status(400).json({ message: 'Enter a valid payment reference.' });
@@ -509,7 +548,9 @@ app.post('/api/subscription/payments', async (req, res) => {
   const payment = await SubscriptionPayment.create({
     id: crypto.randomUUID(),
     userId: user.id,
-    requestedPlan,
+    requestedPlan: level.plan,
+    requestedLevel: level.level,
+    amount: level.amount,
     paymentReference,
     proofData: proofMatch[2],
     proofMimeType: proofMatch[1],
@@ -521,6 +562,8 @@ app.post('/api/subscription/payments', async (req, res) => {
     payment: {
       id: payment.id,
       requestedPlan: payment.requestedPlan,
+      requestedLevel: payment.requestedLevel,
+      amount: payment.amount,
       status: payment.status,
       createdAt: payment.createdAt
     }
@@ -536,6 +579,24 @@ app.get('/api/subscription/payments', async (req, res) => {
     .sort({ createdAt: -1 })
     .lean();
   res.json({ payments });
+});
+
+app.get('/api/referrals', async (req, res) => {
+  const user = await requireRole(req, res, ['member']);
+  if (!user) return;
+
+  const referralFilter = { referredBy: user.id, role: 'member', deletedAt: null };
+  const [total, activated] = await Promise.all([
+    User.countDocuments(referralFilter),
+    User.countDocuments({ ...referralFilter, subscriptionActive: true })
+  ]);
+  res.json({
+    referralCode: user.id,
+    total,
+    activated,
+    awaitingActivation: total - activated,
+    referralEarnings: user.referralEarnings || 0
+  });
 });
 
 app.post('/api/withdraw', async (req, res) => {
@@ -793,29 +854,113 @@ app.post('/api/admin/subscription-payments/:id/review', async (req, res) => {
   if (admin.role === 'admin' && user.role !== 'member') {
     return res.status(403).json({ message: 'Regular admins can only review member payments.' });
   }
-
   const session = await mongoose.startSession();
+  const reviewedAt = new Date().toISOString();
+  let reviewedPayment = null;
+  let referralCommission = null;
+  let blockedReviewMessage = null;
   try {
     await session.withTransaction(async () => {
-      payment.status = status;
-      payment.reviewedAt = new Date().toISOString();
-      payment.reviewedBy = admin.id;
+      reviewedPayment = null;
+      referralCommission = null;
+      blockedReviewMessage = null;
+      let member = null;
+      let referrer = null;
+
       if (status === 'approved') {
-        user.plan = payment.requestedPlan;
-        user.subscriptionActive = true;
+        member = await User.findOne({ id: payment.userId, deletedAt: null }).session(session);
+        if (!member) {
+          blockedReviewMessage = 'The member account for this payment no longer exists.';
+          return;
+        }
+
+        const level = getSubscriptionLevel(payment.requestedLevel);
+        if (!level || payment.requestedPlan !== level.plan || payment.amount !== level.amount) {
+          blockedReviewMessage = 'This payment has no valid current subscription level and fee. Ask the member to submit a new payment using the current level list.';
+          return;
+        }
+
+        if (member.referredBy) {
+          if (member.referredBy === member.id) {
+            blockedReviewMessage = 'This account has an invalid self-referral. Correct the referral record before approving the payment.';
+            return;
+          }
+          referrer = await User.findOne({
+            id: member.referredBy,
+            role: 'member',
+            deletedAt: null
+          }).session(session);
+          if (!referrer) {
+            blockedReviewMessage = 'The referring account is unavailable. Restore or correct the referral account before approving the payment.';
+            return;
+          }
+        }
       }
-      await payment.save({ session });
-      await user.save({ session });
+
+      const claimedPayment = await SubscriptionPayment.findOneAndUpdate(
+        { id: payment.id, status: 'pending' },
+        { $set: { status, reviewedAt, reviewedBy: admin.id } },
+        { new: true, session }
+      );
+      if (!claimedPayment) return;
+
+      if (status === 'approved') {
+        member.plan = claimedPayment.requestedPlan;
+        member.level = claimedPayment.requestedLevel;
+        member.subscriptionActive = true;
+
+        if (referrer) {
+          const commission = calculateReferralCommission(
+            claimedPayment.amount,
+            member.createdAt,
+            reviewedAt
+          );
+          referrer.referralEarnings = (referrer.referralEarnings || 0) + commission.amount;
+          referrer.availableBalance = (referrer.availableBalance || 0) + commission.amount;
+          referrer.transactions.unshift({
+            id: crypto.randomUUID(),
+            date: reviewedAt.slice(0, 10),
+            description: `Referral commission for Level ${claimedPayment.requestedLevel} subscription`,
+            amount: commission.amount,
+            status: 'completed'
+          });
+          await referrer.save({ session });
+          claimedPayment.referralCommissionAmount = commission.amount;
+          claimedPayment.referralCommissionRate = commission.rate;
+          referralCommission = commission;
+        }
+        await member.save({ session });
+      }
+      await claimedPayment.save({ session });
+      reviewedPayment = claimedPayment;
     });
   } finally {
     await session.endSession();
   }
 
+  if (blockedReviewMessage) {
+    return res.status(409).json({ message: blockedReviewMessage });
+  }
+  if (!reviewedPayment) {
+    return res.status(409).json({ message: 'This subscription payment has already been reviewed.' });
+  }
+
+  const commissionMessage = referralCommission
+    ? ` KES ${referralCommission.amount.toLocaleString()} (${referralCommission.rate * 100}%) referral commission was credited to the referrer's wallet.`
+    : '';
   res.json({
     message: status === 'approved'
-      ? `Payment verified. The member's ${payment.requestedPlan} plan is active and daily tasks are unlocked; no wallet funds were added.`
+      ? `Payment verified. The member's Level ${reviewedPayment.requestedLevel} (${reviewedPayment.requestedPlan}) subscription is active and daily tasks are unlocked.${commissionMessage}`
       : 'Payment rejected. No wallet funds were added.',
-    payment: { id: payment.id, status: payment.status, requestedPlan: payment.requestedPlan }
+    payment: {
+      id: reviewedPayment.id,
+      status: reviewedPayment.status,
+      requestedPlan: reviewedPayment.requestedPlan,
+      requestedLevel: reviewedPayment.requestedLevel,
+      amount: reviewedPayment.amount,
+      referralCommissionAmount: reviewedPayment.referralCommissionAmount,
+      referralCommissionRate: reviewedPayment.referralCommissionRate
+    }
   });
 });
 
