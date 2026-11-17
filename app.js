@@ -287,6 +287,9 @@
         if (!tableBody) return;
 
         const row = document.createElement('tr');
+        row.dataset.level = String(level.level);
+        row.classList.add('plan-row', `plan-${level.plan.toLowerCase()}`);
+        if (currentUser?.level === level.level) row.classList.add('current-level');
         const referral = `${level.weekdayReferralCommission.rate * 100}% standard (${currency(level.weekdayReferralCommission.amount)}); ${level.weekendReferralCommission.rate * 100}% if registration and approval are both on a weekend (${currency(level.weekendReferralCommission.amount)})`;
         [
           `Level ${level.level}`,
@@ -349,7 +352,7 @@
     const page = document.createElement('section');
     page.className = 'page';
     page.id = 'referrals';
-    page.innerHTML = '<div class="page-title"><h1>Referrals</h1><p>Share your unique link and earn a wallet commission after your referral’s subscription is approved.</p></div><div class="stats"><div class="card"><h3>People referred</h3><div class="amount" id="referralTotal">0</div></div><div class="card"><h3>Activated</h3><div class="amount" id="referralActivated">0</div></div><div class="card"><h3>Awaiting activation</h3><div class="amount" id="referralAwaiting">0</div></div><div class="card"><h3>Total referral earnings</h3><div class="amount" id="referralEarnings">KES 0</div></div></div><div class="card"><h3>Your referral link</h3><p class="muted">New members who register using this link will be attributed to your account.</p><div class="form-group"><label for="referralLink">Unique link</label><input id="referralLink" type="url" readonly></div><button class="btn btn-primary" type="button" id="copyReferralLink">Copy link</button> <button class="btn btn-light" type="button" id="refreshReferralSummary">Refresh</button><p id="referralMessage" aria-live="polite"></p></div><div class="card"><h3>Commission rules</h3><p>10% is paid for weekday referrals. 20% applies only when the member registers and their subscription is approved on Saturday or Sunday (Africa/Nairobi time). Commission is credited to your wallet after admin approval.</p><p class="muted">A referred member is counted as activated after their subscription is approved.</p></div>';
+    page.innerHTML = '<div class="page-title"><h1>Referrals</h1><p>Share your unique link and earn a wallet commission after your referral’s subscription is approved.</p></div><div class="stats"><div class="card"><h3>People referred</h3><div class="amount" id="referralTotal">0</div></div><div class="card"><h3>Activated</h3><div class="amount" id="referralActivated">0</div></div><div class="card"><h3>Awaiting activation</h3><div class="amount" id="referralAwaiting">0</div></div><div class="card"><h3>Total referral earnings</h3><div class="amount" id="referralEarnings">KES 0</div></div></div><div class="card referral-group-card"><div class="referral-group-heading"><div><span class="eyebrow">FIRST REFERRAL GROUP</span><h3>One-time group reward</h3><p id="referralGroupProgress">0 of 12 eligible activations</p></div><strong id="referralGroupBonus">15% bonus</strong></div><div class="referral-group-track" role="progressbar" aria-label="First referral group progress" aria-valuemin="0" aria-valuemax="12" aria-valuenow="0"><span id="referralGroupProgressBar"></span></div><p class="muted" id="referralGroupDetails">Complete a group of 12 referrals with approved subscriptions and recorded initial fees to earn 15% of their combined subscription amount.</p></div><div class="card"><h3>Your referral link</h3><p class="muted">New members who register using this link will be attributed to your account.</p><div class="form-group"><label for="referralLink">Unique link</label><input id="referralLink" type="url" readonly></div><button class="btn btn-primary" type="button" id="copyReferralLink">Copy link</button> <button class="btn btn-light" type="button" id="refreshReferralSummary">Refresh</button><p id="referralMessage" aria-live="polite"></p></div><div class="card"><h3>Commission rules</h3><p>10% is the standard referral commission. 20% applies only when both registration and subscription approval occur on a weekend in Africa/Nairobi time. Commission is credited to your wallet after admin approval.</p><p class="muted">A referred member is counted as activated after their subscription is approved.</p></div>';
     content.append(page);
     document.getElementById('copyReferralLink').addEventListener('click', copyReferralLink);
     document.getElementById('refreshReferralSummary').addEventListener('click', loadReferralSummary);
@@ -371,6 +374,18 @@
       document.getElementById('referralActivated').textContent = String(summary.activated);
       document.getElementById('referralAwaiting').textContent = String(summary.awaitingActivation);
       document.getElementById('referralEarnings').textContent = currency(summary.referralEarnings);
+      document.getElementById('referralGroupProgress').textContent =
+        `${summary.firstGroupProgress} of ${summary.firstGroupSize} eligible activations`;
+      document.getElementById('referralGroupProgressBar').style.width =
+        `${(summary.firstGroupProgress / summary.firstGroupSize) * 100}%`;
+      document.querySelector('.referral-group-track')
+        .setAttribute('aria-valuenow', String(summary.firstGroupProgress));
+      document.getElementById('referralGroupBonus').textContent = summary.firstGroupBonusAwarded
+        ? `${currency(summary.firstGroupBonusAmount)} paid`
+        : '15% bonus';
+      document.getElementById('referralGroupDetails').textContent = summary.firstGroupBonusAwarded
+        ? `Your first group’s 12 recorded initial subscription fees totaled ${currency(summary.firstGroupBonusBasisAmount)}. The 15% group bonus has been credited to your wallet.`
+        : 'Complete a group of 12 referrals with approved subscriptions and recorded initial fees to earn 15% of their combined subscription amount.';
       if (message) message.textContent = '';
     } catch (error) {
       if (message) message.textContent = `Referral details could not be loaded: ${error.message}`;
@@ -562,7 +577,20 @@
       profileAvatar.textContent = name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
     }
     const profilePlan = document.getElementById('profilePlan');
-    if (profilePlan) profilePlan.textContent = user.plan || 'Basic';
+    const plan = user.plan || 'Basic';
+    if (profilePlan) {
+      profilePlan.textContent = user.level ? `${plan} · Level ${user.level}` : plan;
+      profilePlan.className = `plan-badge plan-${plan.toLowerCase()}`;
+    }
+    const dashboardPlan = document.getElementById('dashboardPlanBadge');
+    if (dashboardPlan) {
+      dashboardPlan.hidden = false;
+      dashboardPlan.textContent = user.level ? `${plan} · Level ${user.level}` : plan;
+      dashboardPlan.className = `current-plan-banner plan-${plan.toLowerCase()}`;
+    }
+    document.querySelectorAll('#levelBenefitsRows tr[data-level]').forEach((row) => {
+      row.classList.toggle('current-level', Number(row.dataset.level) === user.level);
+    });
   }
 
   function updateDashboardLinks(role) {
@@ -655,6 +683,7 @@
     window.updateLevelChallenge();
     updateAccountHeader(data.user);
     updateWithdrawalSchedule(data.user, data.withdrawalSchedule);
+    updateReferralGroupBonusNotice(data.user);
 
     const balance = document.getElementById('balance');
     const totalEarnings = document.getElementById('totalEarnings');
@@ -731,6 +760,33 @@
     if (walletNotice) walletNotice.textContent = scheduleText;
     if (modalNotice) {
       modalNotice.textContent = `Withdrawal amount: KES 500. ${user.plan || 'Basic'} withdrawals: ${scheduleText}`;
+    }
+  }
+
+  function updateReferralGroupBonusNotice(user) {
+    const notice = document.getElementById('referralGroupBonusNotice');
+    if (!notice) return;
+    if (!user.referralGroupBonusAwarded) {
+      notice.hidden = true;
+      notice.replaceChildren();
+      return;
+    }
+
+    const title = document.createElement('strong');
+    title.textContent = 'Congratulations on completing your first referral group!';
+    const details = document.createElement('p');
+    details.textContent = `Your 12 referrals’ initial subscriptions totaled ${currency(user.referralGroupBonusBasisAmount)}. Your 15% group bonus of ${currency(user.referralGroupBonusAmount)} has been credited to your wallet.`;
+    notice.replaceChildren(title, details);
+    notice.hidden = false;
+
+    if (!user.referralGroupBonusNotificationRead) {
+      const popupKey = `taskearnGroupBonusShown:${user.id}`;
+      if (!localStorage.getItem(popupKey)) {
+        localStorage.setItem(popupKey, 'true');
+        window.alert(`Congratulations! You formed your first referral group. Their initial subscription fees totaled ${currency(user.referralGroupBonusBasisAmount)}, and ${currency(user.referralGroupBonusAmount)} (15%) has been added to your wallet.`);
+      }
+      void apiRequest('/api/referrals/group-bonus/acknowledge', { method: 'POST' })
+        .catch((error) => console.error('Could not acknowledge referral group bonus notification:', error));
     }
   }
 

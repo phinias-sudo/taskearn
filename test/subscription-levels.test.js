@@ -5,7 +5,8 @@ const {
   getSubscriptionLevel,
   getWithdrawalSchedule,
   isWithdrawalWindowOpen,
-  calculateReferralCommission
+  calculateReferralCommission,
+  calculateReferralGroupBonus
 } = require('../subscription-levels');
 
 test('subscription levels use the configured tier and fee schedule', () => {
@@ -55,6 +56,25 @@ test('withdrawal schedules follow the plan days and East Africa Time windows', (
   assert.equal(isWithdrawalWindowOpen('VIP', '2024-06-07T03:00:00Z'), false);
   assert.equal(isWithdrawalWindowOpen('Premium', '2024-06-09T11:00:00Z'), true);
   assert.equal(isWithdrawalWindowOpen('Premium', '2024-06-07T03:00:00Z'), true);
+});
+
+test('first referral group bonus is 15% of only the first 12 recorded subscription fees', () => {
+  const amounts = [
+    1000, 1500, 2000, 2500, 3000, 4000,
+    5000, 6000, 7500, 9000, 10500, 12000,
+    70000
+  ];
+  assert.deepEqual(calculateReferralGroupBonus(amounts), {
+    memberCount: 12,
+    basisAmount: 64000,
+    rate: 0.15,
+    amount: 9600
+  });
+  assert.throws(() => calculateReferralGroupBonus(amounts.slice(0, 11)), TypeError);
+  assert.throws(
+    () => calculateReferralGroupBonus([...amounts.slice(0, 11), 0]),
+    TypeError
+  );
 });
 
 test('weekend commission is 20% only when signup and approval are both on weekends in Nairobi time', () => {

@@ -103,10 +103,31 @@ function calculateReferralCommission(subscriptionAmount, registeredAt, approvedA
   };
 }
 
+function calculateReferralGroupBonus(subscriptionAmounts) {
+  if (!Array.isArray(subscriptionAmounts) || subscriptionAmounts.length < 12) {
+    throw new TypeError('Twelve recorded subscription amounts are required for the first referral group bonus.');
+  }
+  const firstGroupAmounts = subscriptionAmounts.slice(0, 12);
+  if (firstGroupAmounts.some((amount) => !Number.isSafeInteger(amount) || amount <= 0)) {
+    throw new TypeError('Each first-group subscription amount must be a positive whole number.');
+  }
+  const basisAmount = firstGroupAmounts.reduce((total, amount) => total + amount, 0);
+  if (!Number.isSafeInteger(basisAmount)) {
+    throw new TypeError('The total first-group subscription amount exceeds the supported range.');
+  }
+  return {
+    memberCount: firstGroupAmounts.length,
+    basisAmount,
+    rate: 0.15,
+    amount: Math.round(basisAmount * 0.15)
+  };
+}
+
 module.exports = {
   levels,
   getSubscriptionLevel,
   getWithdrawalSchedule,
   isWithdrawalWindowOpen,
-  calculateReferralCommission
+  calculateReferralCommission,
+  calculateReferralGroupBonus
 };

@@ -9,7 +9,8 @@ const {
   getSubscriptionLevel,
   getWithdrawalSchedule,
   isWithdrawalWindowOpen,
-  calculateReferralCommission
+  calculateReferralCommission,
+  calculateReferralGroupBonus
 } = require('./subscription-levels');
 
 const app = express();
@@ -51,6 +52,12 @@ const userSchema = new mongoose.Schema({
   availableBalance: { type: Number, default: 0 },
   totalEarnings: { type: Number, default: 0 },
   referralEarnings: { type: Number, default: 0 },
+  referralGroupBonusAwarded: { type: Boolean, default: false },
+  referralGroupBonusAmount: { type: Number, default: 0 },
+  referralGroupBonusBasisAmount: { type: Number, default: 0 },
+  referralGroupBonusMembers: { type: Number, default: 0 },
+  referralGroupBonusAwardedAt: { type: String, default: '' },
+  referralGroupBonusNotificationRead: { type: Boolean, default: false },
   tasksCompleted: { type: Number, default: 0 },
   completedToday: {
     date: { type: String, default: '' },
@@ -258,6 +265,43 @@ function getToday() {
 async function getAllTasks() {
   const publishedTasks = await PublishedTask.find().sort({ createdAt: -1 });
   return publishedTasks.map((task) => task.toObject());
+}
+
+async function getRecordedReferralSubscriptions(referrerId, session) {
+  let referralsQuery = User.find({
+    referredBy: referrerId,
+    role: 'member',
+    deletedAt: null,
+    subscriptionActive: true
+  }).select('id');
+  if (session) referralsQuery = referralsQuery.session(session);
+  const referrals = await referralsQuery.lean();
+  if (!referrals.length) return [];
+
+  let paymentsQuery = SubscriptionPayment.find({
+    userId: { $in: referrals.map((referral) => referral.id) },
+    status: 'approved'
+  })
+    .select('userId requestedPlan requestedLevel amount reviewedAt createdAt')
+    .sort({ reviewedAt: 1, createdAt: 1 });
+  if (session) paymentsQuery = paymentsQuery.session(session);
+  const payments = await paymentsQuery.lean();
+
+  const seenUserIds = new Set();
+  const recordedSubscriptions = [];
+  payments.forEach((payment) => {
+    if (seenUserIds.has(payment.userId)) return;
+    seenUserIds.add(payment.userId);
+
+    const level = getSubscriptionLevel(payment.requestedLevel);
+    if (!level || payment.requestedPlan !== level.plan || payment.amount !== level.amount) return;
+    recordedSubscriptions.push({
+      userId: payment.userId,
+      amount: payment.amount,
+      reviewedAt: payment.reviewedAt || payment.createdAt
+    });
+  });
+  return recordedSubscriptions;
 }
 
 async function ensureRoleAccount({ email: configuredEmail, password, name, role, label }) {
@@ -606,13 +650,32 @@ app.get('/api/referrals', async (req, res) => {
     User.countDocuments(referralFilter),
     User.countDocuments({ ...referralFilter, subscriptionActive: true })
   ]);
+  const recordedSubscriptions = await getRecordedReferralSubscriptions(user.id);
   res.json({
     referralCode: user.id,
     total,
     activated,
     awaitingActivation: total - activated,
-    referralEarnings: user.referralEarnings || 0
+    referralEarnings: user.referralEarnings || 0,
+    firstGroupProgress: Math.min(recordedSubscriptions.length, 12),
+    firstGroupSize: 12,
+    firstGroupBonusAwarded: user.referralGroupBonusAwarded === true,
+    firstGroupBonusAmount: user.referralGroupBonusAmount || 0,
+    firstGroupBonusBasisAmount: user.referralGroupBonusBasisAmount || 0
   });
+});
+
+app.post('/api/referrals/group-bonus/acknowledge', async (req, res) => {
+  const user = await requireRole(req, res, ['member']);
+  if (!user) return;
+  if (!user.referralGroupBonusAwarded) {
+    return res.status(409).json({ message: 'There is no first-group bonus notification to acknowledge.' });
+  }
+  if (!user.referralGroupBonusNotificationRead) {
+    user.referralGroupBonusNotificationRead = true;
+    await user.save();
+  }
+  res.json({ message: 'First-group bonus notification acknowledged.' });
 });
 
 app.post('/api/withdraw', async (req, res) => {
@@ -881,11 +944,13 @@ app.post('/api/admin/subscription-payments/:id/review', async (req, res) => {
   const reviewedAt = new Date().toISOString();
   let reviewedPayment = null;
   let referralCommission = null;
+  let referralGroupBonus = null;
   let blockedReviewMessage = null;
   try {
     await session.withTransaction(async () => {
       reviewedPayment = null;
       referralCommission = null;
+      referralGroupBonus = null;
       blockedReviewMessage = null;
       let member = null;
       let referrer = null;
@@ -931,6 +996,7 @@ app.post('/api/admin/subscription-payments/:id/review', async (req, res) => {
         member.plan = claimedPayment.requestedPlan;
         member.level = claimedPayment.requestedLevel;
         member.subscriptionActive = true;
+        await member.save({ session });
 
         if (referrer) {
           const commission = calculateReferralCommission(
@@ -947,12 +1013,40 @@ app.post('/api/admin/subscription-payments/:id/review', async (req, res) => {
             amount: commission.amount,
             status: 'completed'
           });
-          await referrer.save({ session });
           claimedPayment.referralCommissionAmount = commission.amount;
           claimedPayment.referralCommissionRate = commission.rate;
           referralCommission = commission;
+
+          if (!referrer.referralGroupBonusAwarded) {
+            const recordedSubscriptions = await getRecordedReferralSubscriptions(referrer.id, session);
+            if (recordedSubscriptions.length >= 12) {
+              const groupBonus = calculateReferralGroupBonus(
+                recordedSubscriptions.map((subscription) => subscription.amount)
+              );
+              referrer.referralGroupBonusAwarded = true;
+              referrer.referralGroupBonusAmount = groupBonus.amount;
+              referrer.referralGroupBonusBasisAmount = groupBonus.basisAmount;
+              referrer.referralGroupBonusMembers = groupBonus.memberCount;
+              referrer.referralGroupBonusAwardedAt = reviewedAt;
+              referrer.referralGroupBonusNotificationRead = false;
+              referrer.referralEarnings = (referrer.referralEarnings || 0) + groupBonus.amount;
+              referrer.availableBalance = (referrer.availableBalance || 0) + groupBonus.amount;
+              referrer.transactions.unshift({
+                id: `referral-group-bonus-${referrer.id}`,
+                date: reviewedAt.slice(0, 10),
+                description: 'First referral group bonus (15% of first 12 subscription fees)',
+                amount: groupBonus.amount,
+                status: 'completed'
+              });
+              referralGroupBonus = {
+                amount: groupBonus.amount,
+                basisAmount: groupBonus.basisAmount,
+                memberCount: groupBonus.memberCount
+              };
+            }
+          }
+          await referrer.save({ session });
         }
-        await member.save({ session });
       }
       await claimedPayment.save({ session });
       reviewedPayment = claimedPayment;
@@ -971,9 +1065,12 @@ app.post('/api/admin/subscription-payments/:id/review', async (req, res) => {
   const commissionMessage = referralCommission
     ? ` KES ${referralCommission.amount.toLocaleString()} (${referralCommission.rate * 100}%) referral commission was credited to the referrer's wallet.`
     : '';
+  const groupBonusMessage = referralGroupBonus
+    ? ` The referrer also completed their first group of ${referralGroupBonus.memberCount} activated members: KES ${referralGroupBonus.amount.toLocaleString()} (15% of KES ${referralGroupBonus.basisAmount.toLocaleString()}) was credited to their wallet.`
+    : '';
   res.json({
     message: status === 'approved'
-      ? `Payment verified. The member's Level ${reviewedPayment.requestedLevel} (${reviewedPayment.requestedPlan}) subscription is active and daily tasks are unlocked.${commissionMessage}`
+      ? `Payment verified. The member's Level ${reviewedPayment.requestedLevel} (${reviewedPayment.requestedPlan}) subscription is active and daily tasks are unlocked.${commissionMessage}${groupBonusMessage}`
       : 'Payment rejected. No wallet funds were added.',
     payment: {
       id: reviewedPayment.id,
@@ -982,7 +1079,8 @@ app.post('/api/admin/subscription-payments/:id/review', async (req, res) => {
       requestedLevel: reviewedPayment.requestedLevel,
       amount: reviewedPayment.amount,
       referralCommissionAmount: reviewedPayment.referralCommissionAmount,
-      referralCommissionRate: reviewedPayment.referralCommissionRate
+      referralCommissionRate: reviewedPayment.referralCommissionRate,
+      referralGroupBonusAmount: referralGroupBonus?.amount || 0
     }
   });
 });
