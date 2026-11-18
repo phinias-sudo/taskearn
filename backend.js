@@ -253,13 +253,14 @@ async function requireRole(req, res, allowedRoles, forbiddenMessage) {
 }
 
 function hasTaskAccess(user) {
-  return user.role === 'senior_admin' || user.subscriptionActive === true;
+  return user.role === 'senior_admin'
+    || (user.subscriptionActive === true && getSubscriptionLevel(user.level) !== null);
 }
 
 function requireActiveSubscription(user, res) {
   if (hasTaskAccess(user)) return true;
   res.status(403).json({
-    message: 'An approved subscription is required to access daily tasks. Submit your payment receipt and wait for admin verification.'
+    message: 'Daily tasks require an active subscription with an assigned level. Submit your payment for verification or contact support if your approved account has no level assigned.'
   });
   return false;
 }

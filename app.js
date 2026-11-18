@@ -409,7 +409,7 @@
   }
 
   function updateSubscriptionPaymentAvailability() {
-    const isActive = currentUser?.subscriptionActive === true;
+    const isActive = hasActiveSubscriptionLevel();
     const navItem = document.querySelector('.sidebar .nav-item.subscription-nav-link');
     const page = document.getElementById('subscription-payments');
 
@@ -419,6 +419,13 @@
     }
     if (navItem) navItem.hidden = isActive;
     if (page) page.hidden = isActive;
+  }
+
+  function hasActiveSubscriptionLevel() {
+    return currentUser?.subscriptionActive === true
+      && Number.isInteger(currentUser.level)
+      && currentUser.level >= 1
+      && currentUser.level <= 30;
   }
 
   function showSubscriptionPaymentMessage(message, type = 'info') {
@@ -467,7 +474,7 @@
     updateSubscriptionPaymentAvailability();
     const notices = document.querySelectorAll('#subscriptionAccessDashboard, #subscriptionAccessTasks');
     if (!notices.length || !currentUser || currentUser.role === 'senior_admin') return;
-    if (currentUser.subscriptionActive) {
+    if (hasActiveSubscriptionLevel()) {
       notices.forEach((notice) => {
         notice.hidden = true;
         notice.replaceChildren();
@@ -476,24 +483,28 @@
     }
 
     const latestPayment = payments[0];
-    const message = latestPayment?.status === 'pending'
-      ? 'Your payment is awaiting admin verification. Daily tasks will unlock after approval.'
-      : latestPayment?.status === 'rejected'
-        ? 'Your last payment was not approved. Submit a valid payment receipt to request verification and unlock daily tasks.'
-        : 'An approved subscription is required to access daily tasks. Submit your subscription payment receipt for admin verification.';
+    const message = currentUser.subscriptionActive
+      ? 'Your account is marked active, but it does not have a valid assigned level. Daily tasks are available only to active members with an assigned subscription level. Please contact support.'
+      : latestPayment?.status === 'pending'
+        ? 'Daily tasks are available only to members with an active subscription and assigned level. Your payment is awaiting admin verification.'
+        : latestPayment?.status === 'rejected'
+          ? 'Daily tasks are available only to members with an active subscription and assigned level. Your last payment was not approved; submit a valid receipt for review.'
+          : 'Daily tasks are available only to members with an active subscription and assigned level. Choose a subscription level and submit its payment receipt for admin verification.';
 
     notices.forEach((notice) => {
       notice.hidden = false;
       notice.replaceChildren(document.createTextNode(message));
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'btn btn-primary u-margin-left-10px';
-      button.textContent = 'Subscription payments';
-      button.addEventListener('click', () => {
-        const navItem = document.querySelector('.sidebar .nav-item.subscription-nav-link');
-        window.showPage('subscription-payments', navItem);
-      });
-      notice.append(document.createTextNode(' '), button);
+      if (!currentUser.subscriptionActive) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn btn-primary u-margin-left-10px';
+        button.textContent = 'Choose a subscription level';
+        button.addEventListener('click', () => {
+          const navItem = document.querySelector('.sidebar .nav-item.subscription-nav-link');
+          window.showPage('subscription-payments', navItem);
+        });
+        notice.append(document.createTextNode(' '), button);
+      }
     });
   }
 
