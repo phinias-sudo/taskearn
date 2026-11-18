@@ -703,10 +703,10 @@
     if (totalEarnings) totalEarnings.textContent = currency(data.stats.totalEarnings);
     if (tasksCompleted) tasksCompleted.textContent = String(data.stats.tasksCompleted);
 
-    const walletStats = document.querySelectorAll('#wallet .grid-3 h2');
-    if (walletStats[0]) walletStats[0].textContent = currency(data.user.wallet.totalDeposits);
-    if (walletStats[1]) walletStats[1].textContent = currency(data.user.wallet.totalWithdrawals);
-    if (walletStats[2]) walletStats[2].textContent = currency(data.user.wallet.pendingWithdrawals);
+    const totalWithdrawals = document.getElementById('walletTotalWithdrawals');
+    const pendingWithdrawals = document.getElementById('walletPendingWithdrawals');
+    if (totalWithdrawals) totalWithdrawals.textContent = currency(data.user.wallet.totalWithdrawals);
+    if (pendingWithdrawals) pendingWithdrawals.textContent = currency(data.user.wallet.pendingWithdrawals);
 
     const completedTodayIds = data.user.completedToday?.taskIds || [];
     const completedToday = data.tasks.filter((task) => completedTodayIds.includes(task.id));
