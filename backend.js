@@ -12,6 +12,12 @@ const {
   calculateReferralCommission,
   calculateReferralGroupBonus
 } = require('./subscription-levels');
+const {
+  generateDailyQuestions,
+  getNairobiDate,
+  getNairobiWeekday,
+  isCorrectAnswer
+} = require('./daily-questions');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -259,12 +265,33 @@ function requireActiveSubscription(user, res) {
 }
 
 function getToday() {
-  return new Date().toISOString().slice(0, 10);
+  return getNairobiDate();
 }
 
 async function getAllTasks() {
   const publishedTasks = await PublishedTask.find().sort({ createdAt: -1 });
   return publishedTasks.map((task) => task.toObject());
+}
+
+function getDailyQuestionTasks(user, dateValue = new Date()) {
+  const subscription = getSubscriptionLevel(user.level);
+  if (!subscription) return [];
+  const weekday = getNairobiWeekday(dateValue);
+  if (weekday === 'Saturday' || weekday === 'Sunday') return [];
+  const date = getNairobiDate(dateValue);
+  const questions = generateDailyQuestions(user.level, weekday);
+  return questions.map((question, index) => ({
+    id: `daily-question-${date}-${index + 1}`,
+    name: `Daily Question ${index + 1}`,
+    title: `Daily Question ${index + 1}`,
+    type: 'question',
+    category: 'Daily Question',
+    reward: subscription.amount / 100,
+    description: question.q,
+    questionTask: true,
+    answer: question.answer,
+    createdAt: date
+  }));
 }
 
 async function getRecordedReferralSubscriptions(referrerId, session) {
@@ -485,12 +512,17 @@ app.get('/api/dashboard', async (req, res) => {
   const subscriptionActive = hasTaskAccess(user);
   let availableTasks = [];
   if (subscriptionActive) {
-    const today = getToday();
+    const now = new Date();
+    const today = getNairobiDate(now);
     if (user.completedToday.date !== today) {
       user.completedToday = { date: today, taskIds: [] };
       await user.save();
     }
-    availableTasks = (await getAllTasks()).map((task) => ({
+    const tasks = [
+      ...(await getAllTasks()),
+      ...getDailyQuestionTasks(user, now)
+    ];
+    availableTasks = tasks.map(({ answer, ...task }) => ({
       ...task,
       available: !user.completedToday.taskIds.includes(task.id)
     }));
@@ -514,13 +546,17 @@ app.get('/api/tasks', async (req, res) => {
   if (!user) return;
   if (!requireActiveSubscription(user, res)) return;
 
-  const today = getToday();
+  const now = new Date();
+  const today = getNairobiDate(now);
   if (user.completedToday.date !== today) {
     user.completedToday = { date: today, taskIds: [] };
     await user.save();
   }
   res.json({
-    tasks: (await getAllTasks()).map((task) => ({
+    tasks: [
+      ...(await getAllTasks()),
+      ...getDailyQuestionTasks(user, now)
+    ].map(({ answer, ...task }) => ({
       ...task,
       available: !user.completedToday.taskIds.includes(task.id)
     }))
@@ -532,13 +568,19 @@ app.post('/api/tasks/:taskId/complete', async (req, res) => {
   if (!user) return;
   if (!requireActiveSubscription(user, res)) return;
 
-  const task = (await getAllTasks()).find((item) => item.id === req.params.taskId);
+  const now = new Date();
+  const dailyQuestion = getDailyQuestionTasks(user, now)
+    .find((item) => item.id === req.params.taskId);
+  const task = dailyQuestion || (await getAllTasks()).find((item) => item.id === req.params.taskId);
   if (!task) return res.status(404).json({ message: 'Task not found.' });
 
-  const today = getToday();
+  const today = getNairobiDate(now);
   if (user.completedToday.date !== today) user.completedToday = { date: today, taskIds: [] };
   if (user.completedToday.taskIds.includes(task.id)) {
     return res.status(409).json({ message: 'You have already completed this task today.' });
+  }
+  if (dailyQuestion && !isCorrectAnswer(dailyQuestion.answer, req.body?.answer)) {
+    return res.status(400).json({ message: 'That answer is not correct. Please try again.' });
   }
 
   user.completedToday.taskIds.push(task.id);

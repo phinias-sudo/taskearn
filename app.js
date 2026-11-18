@@ -726,6 +726,18 @@
         const description = document.createElement('p');
         description.textContent = task.description;
         details.append(title, description);
+        let answerInput = null;
+        if (task.questionTask) {
+          const answerLabel = document.createElement('label');
+          answerLabel.className = 'task-answer';
+          answerLabel.textContent = 'Your answer';
+          answerInput = document.createElement('input');
+          answerInput.type = 'text';
+          answerInput.autocomplete = 'off';
+          answerInput.disabled = !task.available;
+          answerLabel.append(answerInput);
+          details.append(answerLabel);
+        }
         if (task.video) {
           const link = document.createElement('a');
           link.href = task.video;
@@ -741,9 +753,11 @@
         reward.textContent = `+${currency(task.reward)}`;
         const button = document.createElement('button');
         button.className = 'btn btn-success';
-        button.textContent = task.available ? 'Complete' : 'Completed today';
+        button.textContent = task.available
+          ? (task.questionTask ? 'Submit answer' : 'Complete')
+          : 'Completed today';
         button.disabled = !task.available;
-        button.onclick = () => window.completeTask(button, task.reward, task.title, task.id);
+        button.onclick = () => window.completeTask(button, task.reward, task.title, task.id, answerInput?.value);
         action.append(reward, button);
         item.append(info, action);
         list.append(item);
@@ -907,7 +921,7 @@
     }
   };
 
-  window.completeTask = async function completeTask(button, amount, name, taskId) {
+  window.completeTask = async function completeTask(button, amount, name, taskId, answer) {
     if (busy || !localStorage.getItem(tokenKey)) {
       if (!localStorage.getItem(tokenKey)) alert('Please log in before completing tasks.');
       return;
@@ -931,7 +945,7 @@
     try {
       const result = await apiRequest(`/api/tasks/${encodeURIComponent(task.id)}/complete`, {
         method: 'POST',
-        body: JSON.stringify({})
+        body: JSON.stringify({ answer: answer ?? '' })
       });
       await loadDashboard();
       window.updateLevelChallenge();
