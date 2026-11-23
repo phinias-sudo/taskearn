@@ -191,7 +191,6 @@
       });
     });
     document.querySelector('.notification')?.remove();
-    document.querySelector('.login-box button[onclick="signInWithGoogle()"]')?.remove();
     document.getElementById('loginClaimModal')?.remove();
     document.querySelector('#dashboard > .alert-success')?.remove();
     document.querySelectorAll('.wallet-actions button').forEach((button) => {
@@ -556,12 +555,7 @@
     }
   }
 
-  const registerLink = document.createElement('button');
-  registerLink.type = 'button';
-  registerLink.className = 'btn btn-light full register-link';
-  registerLink.textContent = 'Create an account';
-  registerLink.addEventListener('click', () => window.openRegister());
-  document.querySelector('.login-box .btn-primary')?.after(registerLink);
+  document.getElementById('openRegisterLink')?.addEventListener('click', () => window.openRegister());
   removeUnavailableFeatures();
 
   function updateAccountHeader(user) {
@@ -832,7 +826,7 @@
     }
 
     busy = true;
-    const button = document.querySelector('.login-box button[onclick="login()"]');
+    const button = document.getElementById('loginButton');
     if (button) {
       button.disabled = true;
       button.textContent = 'Signing in...';
@@ -861,7 +855,7 @@
       busy = false;
       if (button) {
         button.disabled = false;
-        button.textContent = 'Login';
+        button.textContent = 'Sign In';
       }
     }
   };
@@ -1027,17 +1021,40 @@
     }
   };
 
-  window.signInWithGoogle = function signInWithGoogle() {
-    showLoginMessage('Google sign-in has not been configured on the backend yet. Use your email and password for now.', 'info');
-  };
-
   const emailInput = document.getElementById('loginEmail');
   const emailLabel = document.querySelector('label[for="loginEmail"]');
   if (emailInput) {
     emailInput.type = 'email';
     emailInput.placeholder = 'you@example.com';
+    emailInput.value = localStorage.getItem('taskearnRememberedEmail') || '';
   }
   if (emailLabel) emailLabel.textContent = 'Email Address';
+  const rememberLogin = document.getElementById('rememberLogin');
+  if (rememberLogin) rememberLogin.checked = Boolean(localStorage.getItem('taskearnRememberedEmail'));
+
+  document.getElementById('loginForm')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const remember = document.getElementById('rememberLogin')?.checked;
+    if (remember) {
+      localStorage.setItem('taskearnRememberedEmail', document.getElementById('loginEmail').value.trim());
+    } else {
+      localStorage.removeItem('taskearnRememberedEmail');
+    }
+    window.login();
+  });
+
+  document.getElementById('toggleLoginPassword')?.addEventListener('click', (event) => {
+    const password = document.getElementById('loginPassword');
+    if (!password) return;
+    const isHidden = password.type === 'password';
+    password.type = isHidden ? 'text' : 'password';
+    event.currentTarget.textContent = isHidden ? 'Hide' : 'Show';
+    event.currentTarget.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
+  });
+
+  document.getElementById('forgotPassword')?.addEventListener('click', () => {
+    showLoginMessage('Password reset is not available yet. Please contact an administrator for assistance.', 'info');
+  });
 
   async function restoreSession() {
     const token = localStorage.getItem(tokenKey);

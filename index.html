@@ -10,7 +10,38 @@
 <!-- ========================================================= -->
 <!-- User login screen: the first screen users see before access -->
 <!-- ========================================================= -->
-<div class="login-page" id="loginPage"><div class="login-box"><div class="logo">TaskEarn</div><h1>Welcome Back</h1><p>Login to access your earning dashboard.</p><div id="loginMessage"></div><div class="form-group"><label for="loginEmail">Email Address</label><input type="email" id="loginEmail" placeholder="you@example.com"></div><div class="form-group"><label for="loginPassword">Password</label><input type="password" id="loginPassword" placeholder="Enter your password"></div><button class="btn btn-primary full" onclick="login()">Login</button><p class="u-margin-top-20px u-text-align-center">Sign in with the email and password registered for your account.</p></div></div>
+<div class="login-page" id="loginPage">
+  <div class="login-box">
+    <h1>Welcome Back</h1>
+    <p>Sign in to access your earning dashboard.</p>
+    <div id="loginMessage" aria-live="polite"></div>
+    <form id="loginForm" autocomplete="on">
+      <div class="form-group">
+        <label for="loginEmail">Email Address</label>
+        <input type="email" id="loginEmail" name="email" autocomplete="email" placeholder="you@example.com" required>
+      </div>
+      <div class="form-group">
+        <label for="loginPassword">Password</label>
+        <div class="password-field">
+          <input type="password" id="loginPassword" name="password" autocomplete="current-password" placeholder="Enter your password" required>
+          <button type="button" id="toggleLoginPassword" class="password-toggle" aria-label="Show password" aria-controls="loginPassword">Show</button>
+        </div>
+      </div>
+      <div class="login-options">
+        <label class="remember-option"><input type="checkbox" id="rememberLogin"> Remember me</label>
+        <button type="button" id="forgotPassword" class="text-button">Forgot password?</button>
+      </div>
+      <button class="btn btn-primary full" type="submit" id="loginButton">Sign In</button>
+    </form>
+    <div class="login-divider"><span>or</span></div>
+    <button class="google-signin full" type="button" id="googleSignIn" disabled>
+      <span class="google-icon" aria-hidden="true">G</span>
+      Google sign-in coming soon
+    </button>
+    <p class="register-copy">New to TaskEarn? <button type="button" id="openRegisterLink" class="text-button">Create an account</button></p>
+    <p class="login-legal">By continuing, you agree to our <a href="#terms">Terms</a> and <a href="#privacy">Privacy Policy</a>.</p>
+  </div>
+</div>
 
 <!-- ========================================================= -->
 <!-- Main app shell: sidebar navigation and page content wrapper -->
