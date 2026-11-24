@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
+const { OAuth2Client } = require('google-auth-library');
 const {
   levels: subscriptionLevels,
   getSubscriptionLevel,
@@ -385,6 +386,14 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+app.get('/api/auth/google/config', (req, res) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  if (!clientId) {
+    return res.status(503).json({ message: 'Google sign-in is not configured on the server.' });
+  }
+  res.json({ clientId });
+});
+
 app.use('/api', (req, res, next) => {
   if (!databaseReady || mongoose.connection.readyState !== 1) {
     return res.status(503).json({
@@ -487,6 +496,79 @@ app.post('/api/login', async (req, res) => {
 
   return res.json({
     message: 'Login successful.',
+    token: await issueSession(user),
+    user: sanitizeUser(user)
+  });
+});
+
+app.post('/api/auth/google', async (req, res) => {
+  const credential = typeof req.body?.credential === 'string' ? req.body.credential : '';
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  if (!clientId) {
+    return res.status(503).json({ message: 'Google sign-in is not configured on the server.' });
+  }
+  if (!credential) {
+    return res.status(400).json({ message: 'A Google credential is required.' });
+  }
+
+  let payload;
+  try {
+    const ticket = await new OAuth2Client(clientId).verifyIdToken({
+      idToken: credential,
+      audience: clientId
+    });
+    payload = ticket.getPayload();
+  } catch (error) {
+    if (['ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ETIMEDOUT'].includes(error.code)) {
+      return res.status(503).json({ message: 'Google sign-in verification is temporarily unavailable. Please try again.' });
+    }
+    return res.status(401).json({ message: 'Google could not verify your sign-in. Please try again.' });
+  }
+  if (!payload?.email || payload.email_verified !== true) {
+    return res.status(401).json({ message: 'Google must verify your email address to sign in.' });
+  }
+
+  const email = payload.email.trim().toLowerCase();
+  let user = await User.findOne({ email });
+  if (!user) {
+    const referralCode = typeof req.body?.referralCode === 'string' ? req.body.referralCode.trim() : '';
+    let referrer = null;
+    if (referralCode) {
+      if (referralCode.length > 100) {
+        return res.status(400).json({ message: 'The referral link is invalid.' });
+      }
+      referrer = await User.findOne({
+        id: referralCode,
+        role: 'member',
+        deletedAt: null
+      }).select('id email');
+      if (!referrer || referrer.email === email) {
+        return res.status(400).json({ message: 'The referral link is invalid.' });
+      }
+    }
+
+    try {
+      user = await User.create(createUser({
+        name: payload.name || email.split('@')[0],
+        email,
+        password: crypto.randomBytes(32).toString('hex'),
+        referredBy: referrer?.id || null
+      }));
+    } catch (error) {
+      if (error.code !== 11000) throw error;
+      user = await User.findOne({ email });
+      if (!user) throw error;
+    }
+  }
+  if (user.deletedAt) {
+    return res.status(403).json({ message: 'This account has been removed. Contact an administrator for assistance.' });
+  }
+  if (user.status === 'suspended') {
+    return res.status(403).json({ message: 'This account is suspended. Contact a senior administrator for assistance.' });
+  }
+
+  return res.json({
+    message: 'Google sign-in successful.',
     token: await issueSession(user),
     user: sanitizeUser(user)
   });

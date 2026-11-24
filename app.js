@@ -1032,6 +1032,82 @@
   const rememberLogin = document.getElementById('rememberLogin');
   if (rememberLogin) rememberLogin.checked = Boolean(localStorage.getItem('taskearnRememberedEmail'));
 
+  function loadGoogleIdentityServices() {
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true;
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('Google sign-in could not load. Check your internet connection.'));
+      document.head.append(script);
+    });
+  }
+
+  async function setupGoogleSignIn() {
+    const container = document.getElementById('googleSignIn');
+    const status = document.getElementById('googleSignInStatus');
+    if (!container || !status) return;
+
+    try {
+      const { clientId } = await apiRequest('/api/auth/google/config');
+      if (!clientId) throw new Error('Google sign-in is not configured on the server.');
+      await loadGoogleIdentityServices();
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: handleGoogleSignIn
+      });
+      window.google.accounts.id.renderButton(container, {
+        type: 'standard',
+        theme: 'outline',
+        size: 'large',
+        text: 'continue_with',
+        shape: 'rectangular',
+        width: Math.min(Math.max(container.clientWidth, 200), 400)
+      });
+      status.textContent = '';
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  }
+
+  async function handleGoogleSignIn(response) {
+    if (busy) return;
+    if (!response.credential) {
+      showLoginMessage('Google did not return a sign-in credential. Please try again.');
+      return;
+    }
+
+    busy = true;
+    try {
+      const result = await apiRequest('/api/auth/google', {
+        method: 'POST',
+        body: JSON.stringify({
+          credential: response.credential,
+          referralCode: new URLSearchParams(location.search).get('ref') || ''
+        })
+      });
+      localStorage.setItem(tokenKey, result.token);
+      clearLoginMessage();
+      if (result.user.role === 'admin') {
+        window.location.replace('/admin');
+        return;
+      }
+      if (result.user.role === 'senior_admin') {
+        window.location.replace('/senior');
+        return;
+      }
+      await loadDashboard();
+      setVisibleState(true);
+      showRenewalNotification();
+    } catch (error) {
+      showLoginMessage(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  setupGoogleSignIn();
+
   document.getElementById('loginForm')?.addEventListener('submit', (event) => {
     event.preventDefault();
     const remember = document.getElementById('rememberLogin')?.checked;

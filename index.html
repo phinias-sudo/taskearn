@@ -34,10 +34,8 @@
       <button class="btn btn-primary full" type="submit" id="loginButton">Sign In</button>
     </form>
     <div class="login-divider"><span>or</span></div>
-    <button class="google-signin full" type="button" id="googleSignIn" disabled>
-      <span class="google-icon" aria-hidden="true">G</span>
-      Google sign-in coming soon
-    </button>
+    <div id="googleSignIn" class="google-signin-widget"></div>
+    <p id="googleSignInStatus" class="google-signin-status" role="status" aria-live="polite">Loading Google sign-in…</p>
     <p class="register-copy">New to TaskEarn? <button type="button" id="openRegisterLink" class="text-button">Create an account</button></p>
     <p class="login-legal">By continuing, you agree to our <a href="#terms">Terms</a> and <a href="#privacy">Privacy Policy</a>.</p>
   </div>
